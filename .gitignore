@@ -1,0 +1,11 @@
+# Binary
+pg-ddl-merge
+
+# Test output
+testdata/merged.sql
+
+# Local Claude overrides
+.claude.local.md
+
+# macOS
+.DS_Store
