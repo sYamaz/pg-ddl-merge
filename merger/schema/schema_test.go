@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sYamaz/pg-ddl-merge/merger/parser"
@@ -708,5 +709,244 @@ func TestApplyAlterObject_NotFound(t *testing.T) {
 	err := s.Apply(parser.AlterObjectStmt{Kind: parser.ObjView, OldName: "no_view", NewName: "v2"})
 	if err == nil {
 		t.Error("expected error")
+	}
+}
+
+// ---- CREATE TYPE composite / range ------------------------------------------
+
+func TestApplyCreateTypeComposite(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{
+			Kind: parser.ObjType,
+			Name: "address",
+			SQL:  "CREATE TYPE address AS (street text, city text)",
+		},
+	)
+	if len(s.Objects) != 1 || s.Objects[0].Kind != parser.ObjType {
+		t.Fatalf("Objects: %+v", s.Objects)
+	}
+}
+
+func TestApplyDropTypeComposite(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjType, Name: "addr", SQL: "CREATE TYPE addr AS (x int)"},
+		parser.DropTypeStmt{TypeName: "addr"},
+	)
+	if len(s.Objects) != 0 {
+		t.Errorf("expected Objects empty, got %d", len(s.Objects))
+	}
+}
+
+func TestApplyDropTypeComposite_IfExists(t *testing.T) {
+	s := newSchema()
+	// DROP TYPE IF EXISTS on non-existent composite type should not error
+	if err := s.Apply(parser.DropTypeStmt{TypeName: "no_type", IfExists: true}); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyDropTypeComposite_NotFound(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.DropTypeStmt{TypeName: "no_type"}); err == nil {
+		t.Error("expected error for missing type")
+	}
+}
+
+func TestApplyAlterTypeRenameTo_Composite(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{
+			Kind: parser.ObjType,
+			Name: "address",
+			SQL:  "CREATE TYPE address AS (street text, city text)",
+		},
+		parser.AlterTypeStmt{
+			TypeName: "address",
+			Action:   parser.AlterTypeAction{Kind: parser.AlterTypeRenameTo, NewName: "mailing_address"},
+		},
+	)
+	if len(s.Objects) != 1 {
+		t.Fatalf("Objects len: got %d, want 1", len(s.Objects))
+	}
+	if s.Objects[0].Name != "mailing_address" {
+		t.Errorf("Name: got %q, want %q", s.Objects[0].Name, "mailing_address")
+	}
+	if !strings.Contains(s.Objects[0].SQL, "mailing_address") {
+		t.Errorf("SQL should contain new name, got: %s", s.Objects[0].SQL)
+	}
+}
+
+func TestApplyAlterTypeRenameTo_NotFound(t *testing.T) {
+	s := newSchema()
+	err := s.Apply(parser.AlterTypeStmt{
+		TypeName: "no_type",
+		Action:   parser.AlterTypeAction{Kind: parser.AlterTypeRenameTo, NewName: "x"},
+	})
+	if err == nil {
+		t.Error("expected error for missing type")
+	}
+}
+
+// ---- ALTER SEQUENCE opts -----------------------------------------------------
+
+func TestApplyAlterSequenceOpts_IncrementBy(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateSequenceStmt{SeqName: "seq", Body: "INCREMENT BY 1 MINVALUE 1"},
+		parser.AlterSequenceOptsStmt{SeqName: "seq", Opts: []parser.SequenceOption{
+			{Kind: "INCREMENT BY", Value: "5"},
+		}},
+	)
+	if !strings.Contains(s.Sequences[0].Body, "INCREMENT BY 5") {
+		t.Errorf("Body: %q", s.Sequences[0].Body)
+	}
+	if strings.Contains(s.Sequences[0].Body, "INCREMENT BY 1") {
+		t.Errorf("old INCREMENT BY still present: %q", s.Sequences[0].Body)
+	}
+}
+
+func TestApplyAlterSequenceOpts_NoCycle(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateSequenceStmt{SeqName: "seq", Body: "CYCLE"},
+		parser.AlterSequenceOptsStmt{SeqName: "seq", Opts: []parser.SequenceOption{
+			{Kind: "NO CYCLE"},
+		}},
+	)
+	if !strings.Contains(s.Sequences[0].Body, "NO CYCLE") {
+		t.Errorf("Body: %q", s.Sequences[0].Body)
+	}
+	if strings.Contains(s.Sequences[0].Body, "NO NO CYCLE") {
+		t.Errorf("duplicate NO CYCLE: %q", s.Sequences[0].Body)
+	}
+}
+
+func TestApplyAlterSequenceOpts_NoMinValue(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateSequenceStmt{SeqName: "seq", Body: "MINVALUE 1"},
+		parser.AlterSequenceOptsStmt{SeqName: "seq", Opts: []parser.SequenceOption{
+			{Kind: "NO MINVALUE"},
+		}},
+	)
+	if !strings.Contains(s.Sequences[0].Body, "NO MINVALUE") {
+		t.Errorf("Body: %q", s.Sequences[0].Body)
+	}
+	if strings.Contains(s.Sequences[0].Body, "MINVALUE 1") {
+		t.Errorf("old MINVALUE still present: %q", s.Sequences[0].Body)
+	}
+}
+
+func TestApplyAlterSequenceOpts_RestartSkipped(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateSequenceStmt{SeqName: "seq", Body: "INCREMENT BY 1"},
+		parser.AlterSequenceOptsStmt{SeqName: "seq", Opts: []parser.SequenceOption{
+			{Kind: "RESTART", Value: "100"},
+		}},
+	)
+	// RESTART is skipped - body should be unchanged
+	if s.Sequences[0].Body != "INCREMENT BY 1" {
+		t.Errorf("Body changed unexpectedly: %q", s.Sequences[0].Body)
+	}
+}
+
+func TestApplyAlterSequenceOpts_NotFound(t *testing.T) {
+	s := newSchema()
+	err := s.Apply(parser.AlterSequenceOptsStmt{
+		SeqName: "no_seq",
+		Opts:    []parser.SequenceOption{{Kind: "INCREMENT BY", Value: "1"}},
+	})
+	if err == nil {
+		t.Error("expected error for missing sequence")
+	}
+}
+
+// ---- TRUNCATE dedup ---------------------------------------------------------
+
+func TestApplyTruncate_Dedup(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.TruncateStmt{Tables: []string{"orders"}},
+		parser.TruncateStmt{Tables: []string{"orders"}, RestartIdentity: true},
+	)
+	if len(s.Truncates) != 1 {
+		t.Fatalf("expected 1 truncate, got %d", len(s.Truncates))
+	}
+	if !s.Truncates[0].RestartIdentity {
+		t.Error("second TRUNCATE should have replaced first")
+	}
+}
+
+func TestApplyTruncate_MultiTableDedup(t *testing.T) {
+	s := newSchema()
+	// Same table set in different order → same key → dedup
+	applyAll(t, s,
+		parser.TruncateStmt{Tables: []string{"b", "a"}},
+		parser.TruncateStmt{Tables: []string{"a", "b"}, Cascade: true},
+	)
+	if len(s.Truncates) != 1 {
+		t.Fatalf("expected 1 truncate, got %d: %+v", len(s.Truncates), s.Truncates)
+	}
+}
+
+func TestApplyTruncate_DifferentTables(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.TruncateStmt{Tables: []string{"orders"}},
+		parser.TruncateStmt{Tables: []string{"users"}},
+	)
+	if len(s.Truncates) != 2 {
+		t.Fatalf("expected 2 truncates, got %d", len(s.Truncates))
+	}
+}
+
+// ---- PARTITION OF -----------------------------------------------------------
+
+func TestApplyCreateObjectPartition(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{
+			Kind: parser.ObjPartition,
+			Name: "orders_2024",
+			SQL:  "CREATE TABLE orders_2024 PARTITION OF orders FOR VALUES FROM (1) TO (100)",
+		},
+	)
+	found := false
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjPartition && obj.Name == "orders_2024" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("partition not found in Objects: %+v", s.Objects)
+	}
+}
+
+func TestApplyDropTable_Partition(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{
+			Kind: parser.ObjPartition,
+			Name: "orders_2024",
+			SQL:  "CREATE TABLE orders_2024 PARTITION OF orders FOR VALUES FROM (1) TO (100)",
+		},
+		parser.DropTableStmt{TableNames: []string{"orders_2024"}},
+	)
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjPartition {
+			t.Errorf("partition should have been dropped: %+v", obj)
+		}
+	}
+}
+
+func TestApplyDropTable_Partition_IfExists(t *testing.T) {
+	s := newSchema()
+	// DROP TABLE IF EXISTS for non-existent partition should not error
+	err := s.Apply(parser.DropTableStmt{TableNames: []string{"no_partition"}, IfExists: true})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

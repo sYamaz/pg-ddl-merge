@@ -1,0 +1,11 @@
+ALTER SEQUENCE orders_id_seq INCREMENT BY 5;
+
+ALTER SEQUENCE orders_id_seq MAXVALUE 9999999999 CACHE 10;
+
+ALTER SEQUENCE orders_id_seq NO CYCLE;
+
+TRUNCATE orders;
+
+TRUNCATE orders;
+
+ALTER TABLE orders ADD COLUMN total numeric(12,2);

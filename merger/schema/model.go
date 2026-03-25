@@ -35,13 +35,15 @@ type Schema struct {
 	Tables    []*Table
 	Indexes   []Index
 	Objects   []GenericObject
+	Truncates []parser.TruncateStmt
 	Unknowns  []string
 
-	tableIndex map[string]int // normalized name -> index in Tables
-	seqIndex   map[string]int
-	typeIndex  map[string]int
-	indexIndex map[string]int
-	objectIdx  map[string]int // "KIND:normname" -> index in Objects
+	tableIndex  map[string]int // normalized name -> index in Tables
+	seqIndex    map[string]int
+	typeIndex   map[string]int
+	indexIndex  map[string]int
+	objectIdx   map[string]int   // "KIND:normname" -> index in Objects
+	truncateIdx map[string]int   // sorted normalized table list -> index in Truncates
 }
 
 type Table struct {
@@ -54,10 +56,11 @@ type Table struct {
 
 func New() *Schema {
 	return &Schema{
-		tableIndex: map[string]int{},
-		seqIndex:   map[string]int{},
-		typeIndex:  map[string]int{},
-		indexIndex: map[string]int{},
-		objectIdx:  map[string]int{},
+		tableIndex:  map[string]int{},
+		seqIndex:    map[string]int{},
+		typeIndex:   map[string]int{},
+		indexIndex:  map[string]int{},
+		objectIdx:   map[string]int{},
+		truncateIdx: map[string]int{},
 	}
 }

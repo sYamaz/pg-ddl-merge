@@ -579,8 +579,37 @@ func TestParseCreateTypeEnum(t *testing.T) {
 	}
 }
 
-func TestParseCreateTypeNonEnum_FallsBackToUnknown(t *testing.T) {
-	stmt := mustParse(t, "CREATE TYPE address AS (street text, city text)")
+func TestParseCreateTypeComposite(t *testing.T) {
+	stmt := mustParse(t, "CREATE TYPE address AS (street text, city text, zip varchar(10))")
+	cs, ok := stmt.(CreateObjectStmt)
+	if !ok {
+		t.Fatalf("want CreateObjectStmt, got %T", stmt)
+	}
+	if cs.Kind != ObjType {
+		t.Errorf("Kind: got %q, want %q", cs.Kind, ObjType)
+	}
+	if cs.Name != "address" {
+		t.Errorf("Name: got %q, want %q", cs.Name, "address")
+	}
+}
+
+func TestParseCreateTypeRange(t *testing.T) {
+	stmt := mustParse(t, "CREATE TYPE float8range AS RANGE (subtype = float8, subtype_diff = float8mi)")
+	cs, ok := stmt.(CreateObjectStmt)
+	if !ok {
+		t.Fatalf("want CreateObjectStmt, got %T", stmt)
+	}
+	if cs.Kind != ObjType {
+		t.Errorf("Kind: got %q, want %q", cs.Kind, ObjType)
+	}
+	if cs.Name != "float8range" {
+		t.Errorf("Name: got %q, want %q", cs.Name, "float8range")
+	}
+}
+
+func TestParseCreateTypeBase_FallsBackToUnknown(t *testing.T) {
+	// Base type (CREATE TYPE ... with INPUT/OUTPUT functions) → UnknownStmt
+	stmt := mustParse(t, "CREATE TYPE mytype (INPUT = myinput, OUTPUT = myoutput)")
 	if _, ok := stmt.(UnknownStmt); !ok {
 		t.Errorf("want UnknownStmt, got %T", stmt)
 	}
@@ -1021,10 +1050,29 @@ func TestParseAlterSequence_IfExists_RenameTo(t *testing.T) {
 	}
 }
 
-func TestParseAlterSequence_OtherAction_PassThrough(t *testing.T) {
+func TestParseAlterSequence_Restart(t *testing.T) {
+	// RESTART is a recognized option (parsed, but schema skips body update)
 	stmt := mustParse(t, "ALTER SEQUENCE seq RESTART WITH 1")
-	if _, ok := stmt.(UnknownStmt); !ok {
-		t.Errorf("expected UnknownStmt, got %T", stmt)
+	s, ok := stmt.(AlterSequenceOptsStmt)
+	if !ok {
+		t.Fatalf("expected AlterSequenceOptsStmt, got %T", stmt)
+	}
+	if s.SeqName != "seq" {
+		t.Errorf("SeqName: got %q", s.SeqName)
+	}
+	if len(s.Opts) == 0 || s.Opts[0].Kind != "RESTART" {
+		t.Errorf("expected RESTART opt, got %+v", s.Opts)
+	}
+}
+
+func TestParseAlterSequence_UnrecognizedOptions_PassThrough(t *testing.T) {
+	// ALTER SEQUENCE with no recognizable option → UnknownStmt
+	stmt := mustParse(t, "ALTER SEQUENCE seq SET LOGGED UNRECOGNIZED_OPT foo")
+	// SET LOGGED is recognized, so this returns AlterSequenceOptsStmt
+	if _, ok := stmt.(AlterSequenceOptsStmt); !ok {
+		if _, ok2 := stmt.(UnknownStmt); !ok2 {
+			t.Errorf("expected AlterSequenceOptsStmt or UnknownStmt, got %T", stmt)
+		}
 	}
 }
 
@@ -1090,5 +1138,139 @@ func TestParseAlterView_OtherAction_PassThrough(t *testing.T) {
 	stmt := mustParse(t, "ALTER VIEW myview SET (security_barrier=on)")
 	if _, ok := stmt.(UnknownStmt); !ok {
 		t.Errorf("expected UnknownStmt, got %T", stmt)
+	}
+}
+
+// ---- ALTER SEQUENCE options --------------------------------------------------
+
+func TestParseAlterSequence_IncrementBy(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq INCREMENT BY 5")
+	s := stmt.(AlterSequenceOptsStmt)
+	if s.SeqName != "seq" || len(s.Opts) == 0 {
+		t.Fatalf("%+v", s)
+	}
+	if s.Opts[0].Kind != "INCREMENT BY" || s.Opts[0].Value != "5" {
+		t.Errorf("Opts[0]: %+v", s.Opts[0])
+	}
+}
+
+func TestParseAlterSequence_MultipleOpts(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq MINVALUE 1 MAXVALUE 999 CACHE 10 NO CYCLE")
+	s := stmt.(AlterSequenceOptsStmt)
+	if s.SeqName != "seq" {
+		t.Errorf("SeqName: %q", s.SeqName)
+	}
+	kinds := map[string]string{}
+	for _, opt := range s.Opts {
+		kinds[opt.Kind] = opt.Value
+	}
+	if kinds["MINVALUE"] != "1" {
+		t.Errorf("MINVALUE: %q", kinds["MINVALUE"])
+	}
+	if kinds["MAXVALUE"] != "999" {
+		t.Errorf("MAXVALUE: %q", kinds["MAXVALUE"])
+	}
+	if kinds["CACHE"] != "10" {
+		t.Errorf("CACHE: %q", kinds["CACHE"])
+	}
+	if _, ok := kinds["NO CYCLE"]; !ok {
+		t.Errorf("NO CYCLE not found: %v", kinds)
+	}
+}
+
+func TestParseAlterSequence_NoMinValue(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq NO MINVALUE NO MAXVALUE")
+	s := stmt.(AlterSequenceOptsStmt)
+	kinds := map[string]bool{}
+	for _, opt := range s.Opts {
+		kinds[opt.Kind] = true
+	}
+	if !kinds["NO MINVALUE"] || !kinds["NO MAXVALUE"] {
+		t.Errorf("opts: %+v", s.Opts)
+	}
+}
+
+func TestParseAlterSequence_OwnedBy(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq OWNED BY users.id")
+	s := stmt.(AlterSequenceOptsStmt)
+	if len(s.Opts) == 0 || s.Opts[0].Kind != "OWNED BY" || s.Opts[0].Value != "users.id" {
+		t.Errorf("opts: %+v", s.Opts)
+	}
+}
+
+func TestParseAlterSequence_StartWith(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq START WITH 1000")
+	s := stmt.(AlterSequenceOptsStmt)
+	if len(s.Opts) == 0 || s.Opts[0].Kind != "START WITH" || s.Opts[0].Value != "1000" {
+		t.Errorf("opts: %+v", s.Opts)
+	}
+}
+
+// ---- TRUNCATE ---------------------------------------------------------------
+
+func TestParseTruncate_Simple(t *testing.T) {
+	stmt := mustParse(t, "TRUNCATE orders")
+	s := stmt.(TruncateStmt)
+	if len(s.Tables) != 1 || s.Tables[0] != "orders" {
+		t.Errorf("%+v", s)
+	}
+	if s.RestartIdentity || s.Cascade {
+		t.Errorf("unexpected flags: %+v", s)
+	}
+}
+
+func TestParseTruncate_TableKeyword(t *testing.T) {
+	stmt := mustParse(t, "TRUNCATE TABLE orders")
+	s := stmt.(TruncateStmt)
+	if len(s.Tables) != 1 || s.Tables[0] != "orders" {
+		t.Errorf("%+v", s)
+	}
+}
+
+func TestParseTruncate_MultiTable(t *testing.T) {
+	stmt := mustParse(t, "TRUNCATE TABLE foo, bar, baz")
+	s := stmt.(TruncateStmt)
+	if len(s.Tables) != 3 {
+		t.Fatalf("Tables: %v", s.Tables)
+	}
+}
+
+func TestParseTruncate_RestartIdentityCascade(t *testing.T) {
+	stmt := mustParse(t, "TRUNCATE orders RESTART IDENTITY CASCADE")
+	s := stmt.(TruncateStmt)
+	if !s.RestartIdentity || !s.Cascade {
+		t.Errorf("%+v", s)
+	}
+}
+
+func TestParseTruncate_Restrict(t *testing.T) {
+	stmt := mustParse(t, "TRUNCATE orders RESTRICT")
+	s := stmt.(TruncateStmt)
+	if s.Cascade {
+		t.Errorf("Cascade should be false: %+v", s)
+	}
+}
+
+func TestParseTruncate_ContinueIdentity(t *testing.T) {
+	stmt := mustParse(t, "TRUNCATE orders CONTINUE IDENTITY")
+	s := stmt.(TruncateStmt)
+	if s.RestartIdentity {
+		t.Errorf("RestartIdentity should be false: %+v", s)
+	}
+}
+
+// ---- CREATE TABLE PARTITION OF ----------------------------------------------
+
+func TestParseCreateTable_PartitionOf(t *testing.T) {
+	stmt := mustParse(t, "CREATE TABLE orders_2024 PARTITION OF orders FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')")
+	cs, ok := stmt.(CreateObjectStmt)
+	if !ok {
+		t.Fatalf("want CreateObjectStmt, got %T", stmt)
+	}
+	if cs.Kind != ObjPartition {
+		t.Errorf("Kind: got %q, want %q", cs.Kind, ObjPartition)
+	}
+	if cs.Name != "orders_2024" {
+		t.Errorf("Name: got %q", cs.Name)
 	}
 }

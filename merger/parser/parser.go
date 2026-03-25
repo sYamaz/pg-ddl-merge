@@ -9,21 +9,23 @@ import (
 
 var (
 	reCreateTable    = regexp.MustCompile(`(?i)^CREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:(TEMPORARY|TEMP|UNLOGGED)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)\s*\(`)
-	rePartitionOf    = regexp.MustCompile(`(?i)\s+PARTITION\s+OF\s+`)
+	rePartitionOf    = regexp.MustCompile(`(?i)^CREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:(?:TEMPORARY|TEMP|UNLOGGED)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)\s+PARTITION\s+OF\s+`)
 	reCollate        = regexp.MustCompile(`(?i)\s+COLLATE\s+("(?:[^"]|"")*"|\S+)`)
 	reAlterTable     = regexp.MustCompile(`(?i)^ALTER\s+TABLE\s+(?:ONLY\s+)?(\S+)\s+(.+)`)
 	reDropTable      = regexp.MustCompile(`(?i)^DROP\s+TABLE\s+(?:(IF\s+EXISTS)\s+)?(.+)`)
 	reCreateIndex    = regexp.MustCompile(`(?i)^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)\s*(.*)`)
 	reDropIndex      = regexp.MustCompile(`(?i)^DROP\s+INDEX\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
 	reAlterIndex     = regexp.MustCompile(`(?i)^ALTER\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
-	reCreateSequence = regexp.MustCompile(`(?i)^CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)(.*)`)
+	reCreateSequence = regexp.MustCompile(`(?is)^CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)(.*)`)
 	reDropSequence   = regexp.MustCompile(`(?i)^DROP\s+SEQUENCE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
 	reAlterSeqRename = regexp.MustCompile(`(?i)^ALTER\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
-	reCreateTypeEnum = regexp.MustCompile(`(?i)^CREATE\s+TYPE\s+(\S+)\s+AS\s+ENUM\s*\((.+)\)`)
-	reDropType       = regexp.MustCompile(`(?i)^DROP\s+TYPE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
-	reAlterType      = regexp.MustCompile(`(?i)^ALTER\s+TYPE\s+(\S+)\s+(.+)`)
-	reAlterColUsing  = regexp.MustCompile(`(?i)\s+USING\s+.+$`)
-	reAlterObjRename = regexp.MustCompile(`(?i)^ALTER\s+\S+\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
+	reAlterSeqBase   = regexp.MustCompile(`(?i)^ALTER\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?(\S+)\s+(.+)`)
+	reCreateTypeEnum      = regexp.MustCompile(`(?i)^CREATE\s+TYPE\s+(\S+)\s+AS\s+ENUM\s*\((.+)\)`)
+	reCreateTypeComposite = regexp.MustCompile(`(?i)^CREATE\s+TYPE\s+(\S+)\s+AS\s*\(`)
+	reCreateTypeRange     = regexp.MustCompile(`(?i)^CREATE\s+TYPE\s+(\S+)\s+AS\s+RANGE\s*\(`)
+	reDropType            = regexp.MustCompile(`(?i)^DROP\s+TYPE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
+	reAlterType           = regexp.MustCompile(`(?i)^ALTER\s+TYPE\s+(\S+)\s+(.+)`)
+	reAlterColUsing       = regexp.MustCompile(`(?i)\s+USING\s+.+$`)
 )
 
 // normalizeIdent removes surrounding double-quotes and lowercases for key lookup.
@@ -129,6 +131,8 @@ func Parse(sql string) (Statement, error) {
 		return parseCreateObject(sql, ObjRule)
 	case strings.HasPrefix(upper, "DROP RULE"):
 		return parseDropObject(sql, ObjRule)
+	case strings.HasPrefix(upper, "TRUNCATE"):
+		return parseTruncate(sql)
 	default:
 		return UnknownStmt{Raw: sql}, nil
 	}
@@ -137,9 +141,13 @@ func Parse(sql string) (Statement, error) {
 func parseCreateTable(sql string) (Statement, error) {
 	m := reCreateTable.FindStringSubmatchIndex(sql)
 	if m == nil {
-		// PARTITION OF form and other complex variants pass through verbatim.
-		if rePartitionOf.MatchString(sql) {
-			return UnknownStmt{Raw: sql}, nil
+		// PARTITION OF form → verbatim object, tracked by name.
+		if m := rePartitionOf.FindStringSubmatch(sql); m != nil {
+			return CreateObjectStmt{
+				Kind: ObjPartition,
+				Name: normalizeIdent(m[1]),
+				SQL:  strings.TrimSuffix(strings.TrimSpace(sql), ";"),
+			}, nil
 		}
 		return nil, fmt.Errorf("cannot parse CREATE TABLE: %s", sql[:min(len(sql), 60)])
 	}
@@ -283,8 +291,6 @@ func parseColumnList(body string) ([]ColumnDef, []TableConstraint, error) {
 	}
 	return cols, constraints, nil
 }
-
-var reDefaultVal = regexp.MustCompile(`(?i)\s+DEFAULT\s+`)
 
 func parseColumnDef(s string) (ColumnDef, error) {
 	s = strings.TrimSpace(s)
@@ -550,18 +556,6 @@ func isSkippableAlterAction(upper string) bool {
 	return false
 }
 
-func buildColumnDefStr(col ColumnDef) string {
-	parts := []string{col.Name, col.DataType}
-	if col.NotNull {
-		parts = append(parts, "NOT NULL")
-	}
-	if col.Default != nil {
-		parts = append(parts, "DEFAULT "+*col.Default)
-	}
-	parts = append(parts, col.InlineConstraints...)
-	return strings.Join(parts, " ")
-}
-
 func parseDropTable(sql string) (Statement, error) {
 	m := reDropTable.FindStringSubmatch(sql)
 	if m == nil {
@@ -638,9 +632,11 @@ func parseCreateSequence(sql string) (Statement, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot parse CREATE SEQUENCE: %s", sql[:min(len(sql), 60)])
 	}
+	// Normalize multi-line bodies to a single space-separated line.
+	body := regexp.MustCompile(`\s+`).ReplaceAllString(strings.TrimSpace(m[2]), " ")
 	return CreateSequenceStmt{
 		SeqName: m[1],
-		Body:    strings.TrimSpace(m[2]),
+		Body:    body,
 	}, nil
 }
 
@@ -656,16 +652,32 @@ func parseDropSequence(sql string) (Statement, error) {
 }
 
 func parseCreateType(sql string) (Statement, error) {
-	m := reCreateTypeEnum.FindStringSubmatch(sql)
-	if m == nil {
-		// Not an enum, treat as unknown
-		return UnknownStmt{Raw: sql}, nil
+	// ENUM
+	if m := reCreateTypeEnum.FindStringSubmatch(sql); m != nil {
+		labels := splitAtDepthZeroCommas(m[2])
+		for i, l := range labels {
+			labels[i] = strings.Trim(strings.TrimSpace(l), "'")
+		}
+		return CreateTypeStmt{TypeName: m[1], Labels: labels}, nil
 	}
-	labels := splitAtDepthZeroCommas(m[2])
-	for i, l := range labels {
-		labels[i] = strings.Trim(strings.TrimSpace(l), "'")
+	// RANGE: check before COMPOSITE to avoid "AS RANGE (" being matched by COMPOSITE
+	if m := reCreateTypeRange.FindStringSubmatch(sql); m != nil {
+		return CreateObjectStmt{
+			Kind: ObjType,
+			Name: normalizeIdent(m[1]),
+			SQL:  strings.TrimSuffix(strings.TrimSpace(sql), ";"),
+		}, nil
 	}
-	return CreateTypeStmt{TypeName: m[1], Labels: labels}, nil
+	// COMPOSITE: "CREATE TYPE name AS (..."
+	if m := reCreateTypeComposite.FindStringSubmatch(sql); m != nil {
+		return CreateObjectStmt{
+			Kind: ObjType,
+			Name: normalizeIdent(m[1]),
+			SQL:  strings.TrimSuffix(strings.TrimSpace(sql), ";"),
+		}, nil
+	}
+	// Other (base type, etc.) → pass through
+	return UnknownStmt{Raw: sql}, nil
 }
 
 func parseDropType(sql string) (Statement, error) {
@@ -900,8 +912,115 @@ func parseAlterSequence(sql string) (Statement, error) {
 			NewName: strings.TrimSuffix(m[2], ";"),
 		}, nil
 	}
-	// Other ALTER SEQUENCE forms (SET, RESTART, etc.) → pass through
+	// Option-setting form: INCREMENT / MINVALUE / MAXVALUE / START / CACHE / CYCLE / OWNED BY etc.
+	if m := reAlterSeqBase.FindStringSubmatch(sql); m != nil {
+		if opts := parseSequenceOptions(m[2]); len(opts) > 0 {
+			return AlterSequenceOptsStmt{SeqName: m[1], Opts: opts}, nil
+		}
+	}
 	return UnknownStmt{Raw: sql}, nil
+}
+
+// seqOptSpecs defines parseable options in ALTER SEQUENCE ... (non-RENAME).
+// NO variants must come before the bare keyword so family-based dedup works correctly.
+var seqOptSpecs = []struct {
+	re     *regexp.Regexp
+	kind   string
+	family string
+}{
+	{regexp.MustCompile(`(?i)\bNO\s+MINVALUE\b`), "NO MINVALUE", "MINVALUE"},
+	{regexp.MustCompile(`(?i)\bNO\s+MAXVALUE\b`), "NO MAXVALUE", "MAXVALUE"},
+	{regexp.MustCompile(`(?i)\bNO\s+CYCLE\b`), "NO CYCLE", "CYCLE"},
+	{regexp.MustCompile(`(?i)\bINCREMENT\s+(?:BY\s+)?(-?\d+)`), "INCREMENT BY", "INCREMENT"},
+	{regexp.MustCompile(`(?i)\bMINVALUE\s+(-?\d+)`), "MINVALUE", "MINVALUE"},
+	{regexp.MustCompile(`(?i)\bMAXVALUE\s+(-?\d+)`), "MAXVALUE", "MAXVALUE"},
+	{regexp.MustCompile(`(?i)\bSTART\s+(?:WITH\s+)?(-?\d+)`), "START WITH", "START"},
+	{regexp.MustCompile(`(?i)\bCACHE\s+(-?\d+)`), "CACHE", "CACHE"},
+	{regexp.MustCompile(`(?i)\bCYCLE\b`), "CYCLE", "CYCLE"},
+	{regexp.MustCompile(`(?i)\bOWNED\s+BY\s+(\S+)`), "OWNED BY", "OWNED"},
+	{regexp.MustCompile(`(?i)\bAS\s+(\S+)`), "AS", "AS"},
+	{regexp.MustCompile(`(?i)\bSET\s+(LOGGED|UNLOGGED)\b`), "SET", "LOGGED"},
+	// RESTART is runtime state: parse so we don't fall through to UnknownStmt,
+	// but the schema layer will skip body updates for it.
+	{regexp.MustCompile(`(?i)\bRESTART\s+(?:WITH\s+)?(-?\d+)`), "RESTART", "RESTART"},
+	{regexp.MustCompile(`(?i)\bRESTART\b`), "RESTART", "RESTART"},
+}
+
+func parseSequenceOptions(s string) []SequenceOption {
+	s = strings.TrimSpace(strings.TrimSuffix(s, ";"))
+	var opts []SequenceOption
+	seen := map[string]bool{}
+	for _, spec := range seqOptSpecs {
+		if seen[spec.family] {
+			continue
+		}
+		m := spec.re.FindStringSubmatch(s)
+		if m == nil {
+			continue
+		}
+		seen[spec.family] = true
+		val := ""
+		if len(m) > 1 {
+			val = m[1]
+		}
+		opts = append(opts, SequenceOption{Kind: spec.kind, Value: val})
+	}
+	return opts
+}
+
+func parseTruncate(sql string) (Statement, error) {
+	s := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
+
+	restartIdentity := false
+	cascade := false
+
+	// Strip trailing modifier keywords (order matters: innermost last)
+	for {
+		upper := strings.ToUpper(s)
+		switch {
+		case strings.HasSuffix(upper, " CASCADE"):
+			cascade = true
+			s = s[:len(s)-len(" CASCADE")]
+		case strings.HasSuffix(upper, " RESTRICT"):
+			s = s[:len(s)-len(" RESTRICT")]
+		case strings.HasSuffix(upper, " RESTART IDENTITY"):
+			restartIdentity = true
+			s = s[:len(s)-len(" RESTART IDENTITY")]
+		case strings.HasSuffix(upper, " CONTINUE IDENTITY"):
+			s = s[:len(s)-len(" CONTINUE IDENTITY")]
+		default:
+			goto done
+		}
+	}
+done:
+
+	// Strip "TRUNCATE [TABLE]" prefix
+	upper := strings.ToUpper(s)
+	if !strings.HasPrefix(upper, "TRUNCATE") {
+		return UnknownStmt{Raw: sql}, nil
+	}
+	s = strings.TrimSpace(s[len("TRUNCATE"):])
+	if strings.HasPrefix(strings.ToUpper(s), "TABLE ") {
+		s = strings.TrimSpace(s[len("TABLE"):])
+	}
+
+	// Remove ONLY keyword (used for partitioned tables)
+	reOnly := regexp.MustCompile(`(?i)\bONLY\s+`)
+	s = reOnly.ReplaceAllString(s, "")
+
+	// Parse comma-separated table names
+	var tables []string
+	for _, part := range strings.Split(s, ",") {
+		t := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(part), "*"))
+		t = strings.TrimSpace(t)
+		if t != "" {
+			tables = append(tables, t)
+		}
+	}
+	if len(tables) == 0 {
+		return UnknownStmt{Raw: sql}, nil
+	}
+	return TruncateStmt{Tables: tables, RestartIdentity: restartIdentity, Cascade: cascade}, nil
 }
 
 // alterObjRenameEntry describes how to detect a RENAME TO for a generic object kind.
@@ -969,16 +1088,3 @@ func parseAlterObject(sql string) (Statement, error) {
 	return UnknownStmt{Raw: sql}, nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
