@@ -3,6 +3,8 @@ package schema
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/sYamaz/pg-ddl-merge/merger/parser"
@@ -50,6 +52,10 @@ func (s *Schema) Apply(stmt parser.Statement) error {
 		return s.applyDropObject(v)
 	case parser.AlterSequenceStmt:
 		return s.applyAlterSequence(v)
+	case parser.AlterSequenceOptsStmt:
+		return s.applyAlterSequenceOpts(v)
+	case parser.TruncateStmt:
+		s.applyTruncate(v)
 	case parser.AlterObjectStmt:
 		return s.applyAlterObject(v)
 	case parser.UnknownStmt:
@@ -224,6 +230,16 @@ func (s *Schema) dropOneTable(name string, ifExists bool) error {
 	key := normIdent(name)
 	idx, ok := s.tableIndex[key]
 	if !ok {
+		// Also handle partition tables stored as GenericObjects.
+		partKey := objectKey(parser.ObjPartition, name)
+		if partIdx, partOk := s.objectIdx[partKey]; partOk {
+			s.Objects = append(s.Objects[:partIdx], s.Objects[partIdx+1:]...)
+			delete(s.objectIdx, partKey)
+			for i := partIdx; i < len(s.Objects); i++ {
+				s.objectIdx[objectKey(s.Objects[i].Kind, s.Objects[i].Name)] = i
+			}
+			return nil
+		}
 		if ifExists {
 			return nil
 		}
@@ -335,25 +351,47 @@ func (s *Schema) applyCreateType(v parser.CreateTypeStmt) error {
 
 func (s *Schema) applyDropType(v parser.DropTypeStmt) error {
 	key := normIdent(v.TypeName)
-	idx, ok := s.typeIndex[key]
-	if !ok {
-		if v.IfExists {
-			return nil
+	if idx, ok := s.typeIndex[key]; ok {
+		// ENUM type
+		s.Types = append(s.Types[:idx], s.Types[idx+1:]...)
+		delete(s.typeIndex, key)
+		for i := idx; i < len(s.Types); i++ {
+			s.typeIndex[normIdent(s.Types[i].Name)] = i
 		}
-		return fmt.Errorf("DROP TYPE: type not found: %s", v.TypeName)
+		return nil
 	}
-	s.Types = append(s.Types[:idx], s.Types[idx+1:]...)
-	delete(s.typeIndex, key)
-	for i := idx; i < len(s.Types); i++ {
-		s.typeIndex[normIdent(s.Types[i].Name)] = i
+	// Try generic type (composite / range)
+	objKey := objectKey(parser.ObjType, v.TypeName)
+	if objIdx, ok := s.objectIdx[objKey]; ok {
+		s.Objects = append(s.Objects[:objIdx], s.Objects[objIdx+1:]...)
+		delete(s.objectIdx, objKey)
+		for i := objIdx; i < len(s.Objects); i++ {
+			s.objectIdx[objectKey(s.Objects[i].Kind, s.Objects[i].Name)] = i
+		}
+		return nil
 	}
-	return nil
+	if v.IfExists {
+		return nil
+	}
+	return fmt.Errorf("DROP TYPE: type not found: %s", v.TypeName)
 }
 
 func (s *Schema) applyAlterType(v parser.AlterTypeStmt) error {
 	key := normIdent(v.TypeName)
 	idx, ok := s.typeIndex[key]
 	if !ok {
+		// For RENAME TO, also accept generic types (composite / range)
+		if v.Action.Kind == parser.AlterTypeRenameTo {
+			objKey := objectKey(parser.ObjType, v.TypeName)
+			if objIdx, objOk := s.objectIdx[objKey]; objOk {
+				newObjKey := objectKey(parser.ObjType, v.Action.NewName)
+				s.Objects[objIdx].Name = normIdent(v.Action.NewName)
+				s.Objects[objIdx].SQL = replaceTypeNameInSQL(s.Objects[objIdx].SQL, v.TypeName, v.Action.NewName)
+				delete(s.objectIdx, objKey)
+				s.objectIdx[newObjKey] = objIdx
+				return nil
+			}
+		}
 		return fmt.Errorf("ALTER TYPE: type not found: %s", v.TypeName)
 	}
 
@@ -457,6 +495,77 @@ func (s *Schema) applyDropObject(v parser.DropObjectStmt) error {
 	return nil
 }
 
+// seqBodySpecs defines how to upsert an option into a CREATE SEQUENCE body string.
+// Key = SequenceOption.Kind. The removeRe strips all variants of the same family;
+// newFmt is the text to append (%s for the value, or a literal string for flag options).
+var seqBodySpecs = map[string]struct {
+	removeRe *regexp.Regexp
+	newFmt   string
+}{
+	// Use -?\d+ (not \S+) for numeric options so we never consume the next keyword.
+	"INCREMENT BY": {regexp.MustCompile(`(?i)\s*INCREMENT\s+(?:BY\s+)?-?\d+`), "INCREMENT BY %s"},
+	"NO MINVALUE":  {regexp.MustCompile(`(?i)\s*(?:NO\s+)?MINVALUE(?:\s+-?\d+)?`), "NO MINVALUE"},
+	"MINVALUE":     {regexp.MustCompile(`(?i)\s*(?:NO\s+)?MINVALUE(?:\s+-?\d+)?`), "MINVALUE %s"},
+	"NO MAXVALUE":  {regexp.MustCompile(`(?i)\s*(?:NO\s+)?MAXVALUE(?:\s+-?\d+)?`), "NO MAXVALUE"},
+	"MAXVALUE":     {regexp.MustCompile(`(?i)\s*(?:NO\s+)?MAXVALUE(?:\s+-?\d+)?`), "MAXVALUE %s"},
+	"START WITH":   {regexp.MustCompile(`(?i)\s*START(?:\s+WITH)?\s+-?\d+`), "START WITH %s"},
+	"CACHE":        {regexp.MustCompile(`(?i)\s*CACHE\s+-?\d+`), "CACHE %s"},
+	"NO CYCLE":     {regexp.MustCompile(`(?i)\s*(?:NO\s+)?CYCLE\b`), "NO CYCLE"},
+	"CYCLE":        {regexp.MustCompile(`(?i)\s*(?:NO\s+)?CYCLE\b`), "CYCLE"},
+	"OWNED BY":     {regexp.MustCompile(`(?i)\s*OWNED\s+BY\s+\S+`), "OWNED BY %s"},
+	"AS":           {regexp.MustCompile(`(?i)\s*\bAS\s+\S+`), "AS %s"},
+	"SET":          {regexp.MustCompile(`(?i)\s*SET\s+(?:LOGGED|UNLOGGED)\b`), "SET %s"},
+	// "RESTART" intentionally absent: runtime state, no body update needed.
+}
+
+func applySeqBodyOption(body string, opt parser.SequenceOption) string {
+	spec, ok := seqBodySpecs[opt.Kind]
+	if !ok {
+		return body // RESTART or unrecognized — skip
+	}
+	body = spec.removeRe.ReplaceAllString(body, "")
+	body = strings.TrimSpace(body)
+	var newText string
+	if strings.Contains(spec.newFmt, "%s") {
+		newText = fmt.Sprintf(spec.newFmt, opt.Value)
+	} else {
+		newText = spec.newFmt
+	}
+	if body == "" {
+		return newText
+	}
+	return body + " " + newText
+}
+
+func (s *Schema) applyAlterSequenceOpts(v parser.AlterSequenceOptsStmt) error {
+	key := normIdent(v.SeqName)
+	idx, ok := s.seqIndex[key]
+	if !ok {
+		return fmt.Errorf("ALTER SEQUENCE: sequence not found: %s", v.SeqName)
+	}
+	for _, opt := range v.Opts {
+		s.Sequences[idx].Body = applySeqBodyOption(s.Sequences[idx].Body, opt)
+	}
+	return nil
+}
+
+func (s *Schema) applyTruncate(v parser.TruncateStmt) {
+	// Build a dedup key from the sorted normalized table names.
+	sorted := make([]string, len(v.Tables))
+	for i, t := range v.Tables {
+		sorted[i] = normIdent(t)
+	}
+	sort.Strings(sorted)
+	key := strings.Join(sorted, ",")
+
+	if idx, ok := s.truncateIdx[key]; ok {
+		s.Truncates[idx] = v // last one wins
+	} else {
+		s.truncateIdx[key] = len(s.Truncates)
+		s.Truncates = append(s.Truncates, v)
+	}
+}
+
 func (s *Schema) applyAlterSequence(v parser.AlterSequenceStmt) error {
 	oldKey := normIdent(v.SeqName)
 	idx, ok := s.seqIndex[oldKey]
@@ -481,6 +590,26 @@ func (s *Schema) applyAlterObject(v parser.AlterObjectStmt) error {
 	delete(s.objectIdx, oldKey)
 	s.objectIdx[newKey] = idx
 	return nil
+}
+
+// replaceTypeNameInSQL replaces the type name token in "CREATE TYPE <name> ..." SQL.
+func replaceTypeNameInSQL(sql, oldName, newName string) string {
+	upper := strings.ToUpper(sql)
+	const prefix = "CREATE TYPE "
+	pos := strings.Index(upper, prefix)
+	if pos < 0 {
+		return sql
+	}
+	start := pos + len(prefix)
+	rest := sql[start:]
+	end := strings.IndexAny(rest, " \t\n\r")
+	if end < 0 {
+		end = len(rest)
+	}
+	if normIdent(rest[:end]) == normIdent(oldName) {
+		return sql[:start] + newName + rest[end:]
+	}
+	return sql
 }
 
 func findColumnIdx(t *Table, normName string) int {

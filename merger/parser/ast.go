@@ -17,7 +17,9 @@ const (
 	StmtCreateObject
 	StmtDropObject
 	StmtAlterSequence
+	StmtAlterSequenceOpts
 	StmtAlterObject
+	StmtTruncate
 	StmtUnknown
 )
 
@@ -158,6 +160,8 @@ const (
 	ObjDomain    ObjectKind = "DOMAIN"
 	ObjPolicy    ObjectKind = "POLICY"
 	ObjRule      ObjectKind = "RULE"
+	ObjType      ObjectKind = "TYPE"      // composite / range / other non-ENUM types
+	ObjPartition ObjectKind = "PARTITION" // CREATE TABLE ... PARTITION OF
 )
 
 // CreateObjectStmt represents CREATE for any generic tracked object.
@@ -179,6 +183,28 @@ type DropObjectStmt struct {
 type AlterSequenceStmt struct {
 	SeqName string
 	NewName string
+}
+
+// SequenceOption represents a single option in ALTER SEQUENCE ... (non-RENAME).
+// Kind values: "INCREMENT BY", "MINVALUE", "NO MINVALUE", "MAXVALUE", "NO MAXVALUE",
+// "START WITH", "CACHE", "CYCLE", "NO CYCLE", "OWNED BY", "AS", "SET", "RESTART".
+type SequenceOption struct {
+	Kind  string
+	Value string // numeric/identifier value; empty for flag-only kinds (NO MINVALUE etc.)
+}
+
+// AlterSequenceOptsStmt represents ALTER SEQUENCE with options other than RENAME TO.
+// The schema layer applies each option to the corresponding sequence Body.
+type AlterSequenceOptsStmt struct {
+	SeqName string
+	Opts    []SequenceOption
+}
+
+// TruncateStmt represents TRUNCATE TABLE name [, ...] [RESTART IDENTITY] [CASCADE].
+type TruncateStmt struct {
+	Tables          []string
+	RestartIdentity bool
+	Cascade         bool
 }
 
 // AlterObjectStmt represents ALTER <generic-object> ... RENAME TO.
@@ -207,6 +233,8 @@ func (s DropTypeStmt) stmtKind() StatementKind      { return StmtDropType }
 func (s AlterTypeStmt) stmtKind() StatementKind     { return StmtAlterType }
 func (s CreateObjectStmt) stmtKind() StatementKind  { return StmtCreateObject }
 func (s DropObjectStmt) stmtKind() StatementKind    { return StmtDropObject }
-func (s AlterSequenceStmt) stmtKind() StatementKind { return StmtAlterSequence }
-func (s AlterObjectStmt) stmtKind() StatementKind   { return StmtAlterObject }
-func (s UnknownStmt) stmtKind() StatementKind       { return StmtUnknown }
+func (s AlterSequenceStmt) stmtKind() StatementKind     { return StmtAlterSequence }
+func (s AlterSequenceOptsStmt) stmtKind() StatementKind { return StmtAlterSequenceOpts }
+func (s AlterObjectStmt) stmtKind() StatementKind       { return StmtAlterObject }
+func (s TruncateStmt) stmtKind() StatementKind          { return StmtTruncate }
+func (s UnknownStmt) stmtKind() StatementKind           { return StmtUnknown }

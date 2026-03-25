@@ -13,7 +13,7 @@ import (
 //  1. SCHEMA objects
 //  2. EXTENSION objects
 //  3. Sequences
-//  4. Types (ENUM)
+//  4. Types (ENUM, then composite/range)
 //  5. DOMAIN objects
 //  6. Tables
 //  7. Indexes
@@ -59,6 +59,13 @@ func Emit(s *schema.Schema) string {
 		sb.WriteString(fmt.Sprintf("CREATE TYPE %s AS ENUM (\n    %s\n);\n\n",
 			t.Name, strings.Join(labels, ",\n    ")))
 	}
+	// 4b. Types (composite / range — verbatim)
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjType {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
 
 	// 5. DOMAIN
 	for _, obj := range s.Objects {
@@ -72,6 +79,14 @@ func Emit(s *schema.Schema) string {
 	for _, t := range s.Tables {
 		sb.WriteString(emitTable(t))
 		sb.WriteString("\n")
+	}
+
+	// 6b. Partition tables (CREATE TABLE ... PARTITION OF — verbatim)
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjPartition {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
 	}
 
 	// 7. Indexes
@@ -116,7 +131,20 @@ func Emit(s *schema.Schema) string {
 		}
 	}
 
-	// 12. Unknowns
+	// 12. Truncates (deduped per table set)
+	for _, trunc := range s.Truncates {
+		sb.WriteString("TRUNCATE ")
+		sb.WriteString(strings.Join(trunc.Tables, ", "))
+		if trunc.RestartIdentity {
+			sb.WriteString(" RESTART IDENTITY")
+		}
+		if trunc.Cascade {
+			sb.WriteString(" CASCADE")
+		}
+		sb.WriteString(";\n\n")
+	}
+
+	// 13. Unknowns
 	for _, u := range s.Unknowns {
 		sb.WriteString(u)
 		sb.WriteString(";\n\n")
