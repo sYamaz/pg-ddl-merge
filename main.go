@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shunyamazaki/pg-ddl-merge/merger"
+	"github.com/sYamaz/pg-ddl-merge/merger"
 )
 
 func main() {

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shunyamazaki/pg-ddl-merge/merger/parser"
-	"github.com/shunyamazaki/pg-ddl-merge/merger/schema"
+	"github.com/sYamaz/pg-ddl-merge/merger/parser"
+	"github.com/sYamaz/pg-ddl-merge/merger/schema"
 )
 
 func newSchema() *schema.Schema { return schema.New() }

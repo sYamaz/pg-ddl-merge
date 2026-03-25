@@ -3,7 +3,7 @@ package schema
 import (
 	"testing"
 
-	"github.com/shunyamazaki/pg-ddl-merge/merger/parser"
+	"github.com/sYamaz/pg-ddl-merge/merger/parser"
 )
 
 // ---- helpers ----------------------------------------------------------------

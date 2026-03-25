@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/shunyamazaki/pg-ddl-merge/merger/parser"
+	"github.com/sYamaz/pg-ddl-merge/merger/parser"
 )
 
 func normIdent(s string) string {

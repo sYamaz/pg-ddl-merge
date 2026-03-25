@@ -1,6 +1,6 @@
 package schema
 
-import "github.com/shunyamazaki/pg-ddl-merge/merger/parser"
+import "github.com/sYamaz/pg-ddl-merge/merger/parser"
 
 type Sequence struct {
 	Name string

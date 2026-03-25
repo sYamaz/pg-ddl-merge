@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shunyamazaki/pg-ddl-merge/merger/emitter"
-	"github.com/shunyamazaki/pg-ddl-merge/merger/parser"
-	"github.com/shunyamazaki/pg-ddl-merge/merger/schema"
+	"github.com/sYamaz/pg-ddl-merge/merger/emitter"
+	"github.com/sYamaz/pg-ddl-merge/merger/parser"
+	"github.com/sYamaz/pg-ddl-merge/merger/schema"
 )
 
 type Config struct {
