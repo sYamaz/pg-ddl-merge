@@ -461,7 +461,7 @@ func TestParseAlterTable_MultipleActions(t *testing.T) {
 func TestParseDropTable(t *testing.T) {
 	stmt := mustParse(t, "DROP TABLE users")
 	dt := stmt.(DropTableStmt)
-	if dt.TableName != "users" || dt.IfExists {
+	if len(dt.TableNames) != 1 || dt.TableNames[0] != "users" || dt.IfExists {
 		t.Errorf("%+v", dt)
 	}
 }
@@ -471,6 +471,20 @@ func TestParseDropTable_IfExists(t *testing.T) {
 	dt := stmt.(DropTableStmt)
 	if !dt.IfExists {
 		t.Error("expected IfExists=true")
+	}
+}
+
+func TestParseDropTable_MultipleNames(t *testing.T) {
+	stmt := mustParse(t, "DROP TABLE a, b, c CASCADE")
+	dt := stmt.(DropTableStmt)
+	if len(dt.TableNames) != 3 {
+		t.Fatalf("TableNames len: got %d, want 3", len(dt.TableNames))
+	}
+	if dt.TableNames[0] != "a" || dt.TableNames[1] != "b" || dt.TableNames[2] != "c" {
+		t.Errorf("TableNames: %v", dt.TableNames)
+	}
+	if dt.IfExists {
+		t.Error("IfExists should be false")
 	}
 }
 
@@ -582,5 +596,499 @@ func TestParseUnknown(t *testing.T) {
 	}
 	if u.Raw != "SET search_path = public" {
 		t.Errorf("Raw: %q", u.Raw)
+	}
+}
+
+// ---- ALTER TABLE: unrecognized actions (ActionSkip) -------------------------
+
+func TestParseAlterTable_UnrecognizedActionSkipped(t *testing.T) {
+	cases := []string{
+		"ALTER TABLE t SET SCHEMA myschema",
+		"ALTER TABLE t SET TABLESPACE fast",
+		"ALTER TABLE t CLUSTER ON idx",
+		"ALTER TABLE t SET WITHOUT CLUSTER",
+		"ALTER TABLE t ENABLE TRIGGER trg",
+		"ALTER TABLE t DISABLE ROW LEVEL SECURITY",
+		"ALTER TABLE t OWNER TO admin",
+		"ALTER TABLE t VALIDATE CONSTRAINT fk",
+		"ALTER TABLE t ATTACH PARTITION p FOR VALUES FROM (1) TO (100)",
+		"ALTER TABLE t DETACH PARTITION p",
+		"ALTER TABLE t ALTER COLUMN col SET STATISTICS 100",
+		"ALTER TABLE t ALTER COLUMN col SET STORAGE EXTENDED",
+	}
+	for _, sql := range cases {
+		stmt := mustParse(t, sql)
+		at, ok := stmt.(AlterTableStmt)
+		if !ok {
+			t.Errorf("want AlterTableStmt for %q, got %T", sql, stmt)
+			continue
+		}
+		if len(at.Actions) != 1 {
+			t.Errorf("want 1 action for %q, got %d", sql, len(at.Actions))
+			continue
+		}
+		if at.Actions[0].Kind != ActionSkip {
+			t.Errorf("want ActionSkip for %q, got %v", sql, at.Actions[0].Kind)
+		}
+	}
+}
+
+// ---- ALTER INDEX ------------------------------------------------------------
+
+func TestParseAlterIndex_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER INDEX idx_old RENAME TO idx_new")
+	ai, ok := stmt.(AlterIndexStmt)
+	if !ok {
+		t.Fatalf("want AlterIndexStmt, got %T", stmt)
+	}
+	if ai.IndexName != "idx_old" || ai.NewName != "idx_new" {
+		t.Errorf("%+v", ai)
+	}
+}
+
+func TestParseAlterIndex_IfExists(t *testing.T) {
+	stmt := mustParse(t, "ALTER INDEX IF EXISTS idx_old RENAME TO idx_new")
+	ai, ok := stmt.(AlterIndexStmt)
+	if !ok {
+		t.Fatalf("want AlterIndexStmt, got %T", stmt)
+	}
+	if ai.IndexName != "idx_old" || ai.NewName != "idx_new" {
+		t.Errorf("%+v", ai)
+	}
+}
+
+func TestParseAlterIndex_OtherAction_FallsBackToUnknown(t *testing.T) {
+	stmt := mustParse(t, "ALTER INDEX idx SET (fillfactor = 70)")
+	if _, ok := stmt.(UnknownStmt); !ok {
+		t.Errorf("want UnknownStmt, got %T", stmt)
+	}
+}
+
+// ---- DROP TYPE --------------------------------------------------------------
+
+func TestParseDropType(t *testing.T) {
+	stmt := mustParse(t, "DROP TYPE status")
+	dt, ok := stmt.(DropTypeStmt)
+	if !ok {
+		t.Fatalf("want DropTypeStmt, got %T", stmt)
+	}
+	if dt.TypeName != "status" || dt.IfExists {
+		t.Errorf("%+v", dt)
+	}
+}
+
+func TestParseDropType_IfExists(t *testing.T) {
+	stmt := mustParse(t, "DROP TYPE IF EXISTS status")
+	dt := stmt.(DropTypeStmt)
+	if !dt.IfExists {
+		t.Error("expected IfExists=true")
+	}
+	if dt.TypeName != "status" {
+		t.Errorf("TypeName: %q", dt.TypeName)
+	}
+}
+
+// ---- ALTER TYPE -------------------------------------------------------------
+
+func TestParseAlterType_AddValue(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE status ADD VALUE 'pending'")
+	at, ok := stmt.(AlterTypeStmt)
+	if !ok {
+		t.Fatalf("want AlterTypeStmt, got %T", stmt)
+	}
+	if at.TypeName != "status" {
+		t.Errorf("TypeName: %q", at.TypeName)
+	}
+	if at.Action.Kind != AlterTypeAddValue {
+		t.Errorf("Kind: %v", at.Action.Kind)
+	}
+	if at.Action.Value != "pending" {
+		t.Errorf("Value: %q", at.Action.Value)
+	}
+	if at.Action.IfNotExists {
+		t.Error("IfNotExists should be false")
+	}
+}
+
+func TestParseAlterType_AddValueIfNotExists(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE status ADD VALUE IF NOT EXISTS 'new_val'")
+	at := stmt.(AlterTypeStmt)
+	if !at.Action.IfNotExists {
+		t.Error("expected IfNotExists=true")
+	}
+	if at.Action.Value != "new_val" {
+		t.Errorf("Value: %q", at.Action.Value)
+	}
+}
+
+func TestParseAlterType_AddValueBefore(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE status ADD VALUE 'new' BEFORE 'old'")
+	at := stmt.(AlterTypeStmt)
+	if at.Action.Before != "old" {
+		t.Errorf("Before: %q", at.Action.Before)
+	}
+	if at.Action.After != "" {
+		t.Errorf("After should be empty: %q", at.Action.After)
+	}
+}
+
+func TestParseAlterType_AddValueAfter(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE status ADD VALUE 'new' AFTER 'existing'")
+	at := stmt.(AlterTypeStmt)
+	if at.Action.After != "existing" {
+		t.Errorf("After: %q", at.Action.After)
+	}
+}
+
+func TestParseAlterType_RenameValue(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE status RENAME VALUE 'old' TO 'new'")
+	at, ok := stmt.(AlterTypeStmt)
+	if !ok {
+		t.Fatalf("want AlterTypeStmt, got %T", stmt)
+	}
+	if at.Action.Kind != AlterTypeRenameValue {
+		t.Errorf("Kind: %v", at.Action.Kind)
+	}
+	if at.Action.Value != "old" || at.Action.NewValue != "new" {
+		t.Errorf("Value=%q NewValue=%q", at.Action.Value, at.Action.NewValue)
+	}
+}
+
+func TestParseAlterType_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE old_type RENAME TO new_type")
+	at, ok := stmt.(AlterTypeStmt)
+	if !ok {
+		t.Fatalf("want AlterTypeStmt, got %T", stmt)
+	}
+	if at.Action.Kind != AlterTypeRenameTo {
+		t.Errorf("Kind: %v", at.Action.Kind)
+	}
+	if at.Action.NewName != "new_type" {
+		t.Errorf("NewName: %q", at.Action.NewName)
+	}
+}
+
+func TestParseAlterType_UnknownAction_FallsBackToUnknown(t *testing.T) {
+	stmt := mustParse(t, "ALTER TYPE mytype SET SCHEMA newschema")
+	if _, ok := stmt.(UnknownStmt); !ok {
+		t.Errorf("want UnknownStmt, got %T", stmt)
+	}
+}
+
+// ---- Generic CREATE objects -------------------------------------------------
+
+func TestParseCreateView(t *testing.T) {
+	stmt := mustParse(t, "CREATE VIEW v AS SELECT 1")
+	co, ok := stmt.(CreateObjectStmt)
+	if !ok {
+		t.Fatalf("want CreateObjectStmt, got %T", stmt)
+	}
+	if co.Kind != ObjView {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	if co.Name != "v" {
+		t.Errorf("Name: %q", co.Name)
+	}
+	if co.OrReplace {
+		t.Error("OrReplace should be false")
+	}
+}
+
+func TestParseCreateOrReplaceView(t *testing.T) {
+	stmt := mustParse(t, "CREATE OR REPLACE VIEW myview AS SELECT 1")
+	co := stmt.(CreateObjectStmt)
+	if !co.OrReplace {
+		t.Error("expected OrReplace=true")
+	}
+	if co.Kind != ObjView {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	if co.Name != "myview" {
+		t.Errorf("Name: %q", co.Name)
+	}
+}
+
+func TestParseCreateMaterializedView(t *testing.T) {
+	stmt := mustParse(t, "CREATE MATERIALIZED VIEW mv AS SELECT 1")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjMatView {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	if co.Name != "mv" {
+		t.Errorf("Name: %q", co.Name)
+	}
+}
+
+func TestParseCreateSchema(t *testing.T) {
+	stmt := mustParse(t, "CREATE SCHEMA myschema")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjSchema || co.Name != "myschema" {
+		t.Errorf("%+v", co)
+	}
+}
+
+func TestParseCreateExtension(t *testing.T) {
+	stmt := mustParse(t, "CREATE EXTENSION IF NOT EXISTS pg_trgm")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjExtension || co.Name != "pg_trgm" {
+		t.Errorf("%+v", co)
+	}
+}
+
+func TestParseCreateFunction(t *testing.T) {
+	stmt := mustParse(t, "CREATE FUNCTION myfunc(x int) RETURNS int AS $$ SELECT x $$ LANGUAGE sql")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjFunction || co.Name != "myfunc" {
+		t.Errorf("%+v", co)
+	}
+}
+
+func TestParseCreateOrReplaceFunction(t *testing.T) {
+	stmt := mustParse(t, "CREATE OR REPLACE FUNCTION myfunc() RETURNS void AS $$ $$ LANGUAGE sql")
+	co := stmt.(CreateObjectStmt)
+	if !co.OrReplace {
+		t.Error("expected OrReplace=true")
+	}
+	if co.Kind != ObjFunction || co.Name != "myfunc" {
+		t.Errorf("%+v", co)
+	}
+}
+
+func TestParseCreateProcedure(t *testing.T) {
+	stmt := mustParse(t, "CREATE PROCEDURE myproc() LANGUAGE sql AS $$ $$")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjProcedure || co.Name != "myproc" {
+		t.Errorf("%+v", co)
+	}
+}
+
+func TestParseCreateTrigger(t *testing.T) {
+	stmt := mustParse(t, "CREATE TRIGGER my_trigger AFTER INSERT ON users FOR EACH ROW EXECUTE FUNCTION f()")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjTrigger {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	// name should be "my_trigger_on_users"
+	if co.Name != "my_trigger_on_users" {
+		t.Errorf("Name: %q", co.Name)
+	}
+}
+
+func TestParseCreateConstraintTrigger(t *testing.T) {
+	stmt := mustParse(t, "CREATE CONSTRAINT TRIGGER ctrg AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION f()")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjTrigger {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	if co.Name != "ctrg_on_orders" {
+		t.Errorf("Name: %q", co.Name)
+	}
+}
+
+func TestParseCreateDomain(t *testing.T) {
+	stmt := mustParse(t, "CREATE DOMAIN posint AS integer CHECK (VALUE > 0)")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjDomain || co.Name != "posint" {
+		t.Errorf("%+v", co)
+	}
+}
+
+func TestParseCreatePolicy(t *testing.T) {
+	stmt := mustParse(t, "CREATE POLICY p1 ON users USING (user_id = current_user_id())")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjPolicy {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	if co.Name != "p1_on_users" {
+		t.Errorf("Name: %q", co.Name)
+	}
+}
+
+func TestParseCreateRule(t *testing.T) {
+	stmt := mustParse(t, "CREATE RULE r1 AS ON INSERT TO myview DO INSTEAD NOTHING")
+	co := stmt.(CreateObjectStmt)
+	if co.Kind != ObjRule {
+		t.Errorf("Kind: %v", co.Kind)
+	}
+	if co.Name != "r1_on_myview" {
+		t.Errorf("Name: %q", co.Name)
+	}
+}
+
+// ---- Generic DROP objects ---------------------------------------------------
+
+func TestParseDropView(t *testing.T) {
+	stmt := mustParse(t, "DROP VIEW IF EXISTS myview")
+	do, ok := stmt.(DropObjectStmt)
+	if !ok {
+		t.Fatalf("want DropObjectStmt, got %T", stmt)
+	}
+	if do.Kind != ObjView || do.Name != "myview" || !do.IfExists {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropMaterializedView(t *testing.T) {
+	stmt := mustParse(t, "DROP MATERIALIZED VIEW mv")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjMatView || do.Name != "mv" || do.IfExists {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropSchema(t *testing.T) {
+	stmt := mustParse(t, "DROP SCHEMA IF EXISTS s1")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjSchema || do.Name != "s1" || !do.IfExists {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropExtension(t *testing.T) {
+	stmt := mustParse(t, "DROP EXTENSION pg_trgm")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjExtension || do.Name != "pg_trgm" {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropFunction(t *testing.T) {
+	stmt := mustParse(t, "DROP FUNCTION IF EXISTS myfunc(int)")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjFunction || do.Name != "myfunc" || !do.IfExists {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropProcedure(t *testing.T) {
+	stmt := mustParse(t, "DROP PROCEDURE myproc")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjProcedure || do.Name != "myproc" {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropTrigger(t *testing.T) {
+	stmt := mustParse(t, "DROP TRIGGER IF EXISTS my_trigger ON users")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjTrigger || !do.IfExists {
+		t.Errorf("%+v", do)
+	}
+	if do.Name != "my_trigger_on_users" {
+		t.Errorf("Name: %q", do.Name)
+	}
+}
+
+func TestParseDropDomain(t *testing.T) {
+	stmt := mustParse(t, "DROP DOMAIN posint")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjDomain || do.Name != "posint" {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropPolicy(t *testing.T) {
+	stmt := mustParse(t, "DROP POLICY p1 ON users")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjPolicy || do.Name != "p1_on_users" {
+		t.Errorf("%+v", do)
+	}
+}
+
+func TestParseDropRule(t *testing.T) {
+	stmt := mustParse(t, "DROP RULE r1 ON myview")
+	do := stmt.(DropObjectStmt)
+	if do.Kind != ObjRule || do.Name != "r1_on_myview" {
+		t.Errorf("%+v", do)
+	}
+}
+
+// ---- ALTER SEQUENCE ---------------------------------------------------------
+
+func TestParseAlterSequence_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq RENAME TO seq2")
+	as := stmt.(AlterSequenceStmt)
+	if as.SeqName != "seq" || as.NewName != "seq2" {
+		t.Errorf("%+v", as)
+	}
+}
+
+func TestParseAlterSequence_IfExists_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE IF EXISTS myseq RENAME TO newseq")
+	as := stmt.(AlterSequenceStmt)
+	if as.SeqName != "myseq" || as.NewName != "newseq" {
+		t.Errorf("%+v", as)
+	}
+}
+
+func TestParseAlterSequence_OtherAction_PassThrough(t *testing.T) {
+	stmt := mustParse(t, "ALTER SEQUENCE seq RESTART WITH 1")
+	if _, ok := stmt.(UnknownStmt); !ok {
+		t.Errorf("expected UnknownStmt, got %T", stmt)
+	}
+}
+
+// ---- ALTER <object> RENAME TO -----------------------------------------------
+
+func TestParseAlterView_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER VIEW myview RENAME TO newview")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjView || ao.OldName != "myview" || ao.NewName != "newview" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterMatView_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER MATERIALIZED VIEW mv RENAME TO mv2")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjMatView || ao.OldName != "mv" || ao.NewName != "mv2" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterSchema_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER SCHEMA s1 RENAME TO s2")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjSchema || ao.OldName != "s1" || ao.NewName != "s2" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterFunction_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER FUNCTION myfunc(integer) RENAME TO myfunc2")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjFunction || ao.OldName != "myfunc" || ao.NewName != "myfunc2" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterDomain_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER DOMAIN posint RENAME TO positive_int")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjDomain || ao.OldName != "posint" || ao.NewName != "positive_int" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterTrigger_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER TRIGGER trg ON users RENAME TO trg2")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjTrigger || ao.OldName != "trg_on_users" || ao.NewName != "trg2_on_users" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterPolicy_RenameTo(t *testing.T) {
+	stmt := mustParse(t, "ALTER POLICY p1 ON orders RENAME TO p2")
+	ao := stmt.(AlterObjectStmt)
+	if ao.Kind != ObjPolicy || ao.OldName != "p1_on_orders" || ao.NewName != "p2_on_orders" {
+		t.Errorf("%+v", ao)
+	}
+}
+
+func TestParseAlterView_OtherAction_PassThrough(t *testing.T) {
+	stmt := mustParse(t, "ALTER VIEW myview SET (security_barrier=on)")
+	if _, ok := stmt.(UnknownStmt); !ok {
+		t.Errorf("expected UnknownStmt, got %T", stmt)
 	}
 }

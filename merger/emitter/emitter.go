@@ -9,9 +9,39 @@ import (
 )
 
 // Emit generates clean DDL SQL from the schema model.
+// Output order:
+//  1. SCHEMA objects
+//  2. EXTENSION objects
+//  3. Sequences
+//  4. Types (ENUM)
+//  5. DOMAIN objects
+//  6. Tables
+//  7. Indexes
+//  8. FUNCTION + PROCEDURE objects
+//  9. VIEW + MATERIALIZED VIEW objects
+//  10. TRIGGER objects
+//  11. POLICY + RULE objects
+//  12. Unknowns (pass-through)
 func Emit(s *schema.Schema) string {
 	var sb strings.Builder
 
+	// 1. SCHEMA
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjSchema {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 2. EXTENSION
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjExtension {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 3. Sequences
 	for _, seq := range s.Sequences {
 		sb.WriteString(fmt.Sprintf("CREATE SEQUENCE %s", seq.Name))
 		if seq.Body != "" {
@@ -20,6 +50,7 @@ func Emit(s *schema.Schema) string {
 		sb.WriteString(";\n\n")
 	}
 
+	// 4. Types (ENUM)
 	for _, t := range s.Types {
 		labels := make([]string, len(t.Labels))
 		for i, l := range t.Labels {
@@ -29,11 +60,21 @@ func Emit(s *schema.Schema) string {
 			t.Name, strings.Join(labels, ",\n    ")))
 	}
 
+	// 5. DOMAIN
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjDomain {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 6. Tables
 	for _, t := range s.Tables {
 		sb.WriteString(emitTable(t))
 		sb.WriteString("\n")
 	}
 
+	// 7. Indexes
 	for _, idx := range s.Indexes {
 		unique := ""
 		if idx.Unique {
@@ -43,6 +84,39 @@ func Emit(s *schema.Schema) string {
 			unique, idx.Name, idx.TableName, idx.Body))
 	}
 
+	// 8. FUNCTION + PROCEDURE
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjFunction || obj.Kind == parser.ObjProcedure {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 9. VIEW + MATERIALIZED VIEW
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjView || obj.Kind == parser.ObjMatView {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 10. TRIGGER
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjTrigger {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 11. POLICY + RULE
+	for _, obj := range s.Objects {
+		if obj.Kind == parser.ObjPolicy || obj.Kind == parser.ObjRule {
+			sb.WriteString(obj.SQL)
+			sb.WriteString(";\n\n")
+		}
+	}
+
+	// 12. Unknowns
 	for _, u := range s.Unknowns {
 		sb.WriteString(u)
 		sb.WriteString(";\n\n")

@@ -238,3 +238,136 @@ func TestEmit_Ordering(t *testing.T) {
 		t.Errorf("wrong ordering: seq=%d type=%d table=%d idx=%d\n%s", seqPos, typePos, tablePos, idxPos, got)
 	}
 }
+
+// ---- Full ordering: schema → extension → seq → type → domain → table → index → func/proc → view/matview → trigger → policy/rule → unknowns
+
+func TestEmit_FullOrdering(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}})
+	mustApply(t, s, parser.CreateSequenceStmt{SeqName: "seq"})
+	mustApply(t, s, parser.CreateTypeStmt{TypeName: "status", Labels: []string{"a"}})
+	mustApply(t, s, parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id)"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjSchema, Name: "myschema", SQL: "CREATE SCHEMA myschema"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjExtension, Name: "pg_trgm", SQL: "CREATE EXTENSION pg_trgm"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjFunction, Name: "f", SQL: "CREATE FUNCTION f() RETURNS void AS $$ $$ LANGUAGE sql"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE VIEW v AS SELECT 1"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjTrigger, Name: "trg_on_t", SQL: "CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION f()"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjDomain, Name: "posint", SQL: "CREATE DOMAIN posint AS integer CHECK (VALUE > 0)"})
+	mustApply(t, s, parser.CreateObjectStmt{Kind: parser.ObjPolicy, Name: "p_on_t", SQL: "CREATE POLICY p ON t USING (true)"})
+	mustApply(t, s, parser.UnknownStmt{Raw: "SET search_path = public"})
+
+	got := Emit(s)
+
+	schemaPos := strings.Index(got, "CREATE SCHEMA")
+	extPos := strings.Index(got, "CREATE EXTENSION")
+	seqPos := strings.Index(got, "CREATE SEQUENCE")
+	typePos := strings.Index(got, "CREATE TYPE")
+	domainPos := strings.Index(got, "CREATE DOMAIN")
+	tablePos := strings.Index(got, "CREATE TABLE")
+	idxPos := strings.Index(got, "CREATE INDEX")
+	funcPos := strings.Index(got, "CREATE FUNCTION")
+	viewPos := strings.Index(got, "CREATE VIEW")
+	trgPos := strings.Index(got, "CREATE TRIGGER")
+	polPos := strings.Index(got, "CREATE POLICY")
+	unkPos := strings.Index(got, "SET search_path")
+
+	order := []struct {
+		name string
+		pos  int
+	}{
+		{"schema", schemaPos},
+		{"extension", extPos},
+		{"sequence", seqPos},
+		{"type", typePos},
+		{"domain", domainPos},
+		{"table", tablePos},
+		{"index", idxPos},
+		{"function", funcPos},
+		{"view", viewPos},
+		{"trigger", trgPos},
+		{"policy", polPos},
+		{"unknown", unkPos},
+	}
+
+	for i := 0; i < len(order)-1; i++ {
+		if order[i].pos < 0 {
+			t.Errorf("%s not found in output", order[i].name)
+			continue
+		}
+		if order[i+1].pos < 0 {
+			t.Errorf("%s not found in output", order[i+1].name)
+			continue
+		}
+		if order[i].pos >= order[i+1].pos {
+			t.Errorf("ordering violation: %s (pos=%d) should come before %s (pos=%d)\n%s",
+				order[i].name, order[i].pos, order[i+1].name, order[i+1].pos, got)
+		}
+	}
+}
+
+// ---- Generic objects --------------------------------------------------------
+
+func TestEmit_GenericObject_View(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateObjectStmt{
+		Kind: parser.ObjView,
+		Name: "myview",
+		SQL:  "CREATE VIEW myview AS SELECT 1",
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE VIEW myview AS SELECT 1;") {
+		t.Errorf("missing view SQL: %s", got)
+	}
+}
+
+func TestEmit_GenericObject_MatView(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateObjectStmt{
+		Kind: parser.ObjMatView,
+		Name: "mv",
+		SQL:  "CREATE MATERIALIZED VIEW mv AS SELECT 1",
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE MATERIALIZED VIEW mv AS SELECT 1;") {
+		t.Errorf("missing materialized view SQL: %s", got)
+	}
+}
+
+func TestEmit_GenericObject_Function(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateObjectStmt{
+		Kind: parser.ObjFunction,
+		Name: "myfunc",
+		SQL:  "CREATE FUNCTION myfunc() RETURNS void AS $$ $$ LANGUAGE sql",
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE FUNCTION myfunc()") {
+		t.Errorf("missing function SQL: %s", got)
+	}
+}
+
+func TestEmit_GenericObject_Schema(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateObjectStmt{
+		Kind: parser.ObjSchema,
+		Name: "myschema",
+		SQL:  "CREATE SCHEMA myschema",
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE SCHEMA myschema;") {
+		t.Errorf("missing schema: %s", got)
+	}
+}
+
+func TestEmit_GenericObject_Extension(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateObjectStmt{
+		Kind: parser.ObjExtension,
+		Name: "pg_trgm",
+		SQL:  "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE EXTENSION IF NOT EXISTS pg_trgm;") {
+		t.Errorf("missing extension: %s", got)
+	}
+}

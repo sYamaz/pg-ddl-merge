@@ -51,7 +51,19 @@ func TestApplyDropTable(t *testing.T) {
 	s := newSchema()
 	applyAll(t, s,
 		parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
-		parser.DropTableStmt{TableName: "t"},
+		parser.DropTableStmt{TableNames: []string{"t"}},
+	)
+	if len(s.Tables) != 0 {
+		t.Errorf("expected empty Tables, got %d", len(s.Tables))
+	}
+}
+
+func TestApplyDropTable_MultipleNames(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTableStmt{TableName: "a", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
+		parser.CreateTableStmt{TableName: "b", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
+		parser.DropTableStmt{TableNames: []string{"a", "b"}},
 	)
 	if len(s.Tables) != 0 {
 		t.Errorf("expected empty Tables, got %d", len(s.Tables))
@@ -60,14 +72,14 @@ func TestApplyDropTable(t *testing.T) {
 
 func TestApplyDropTable_NotFound(t *testing.T) {
 	s := newSchema()
-	if err := s.Apply(parser.DropTableStmt{TableName: "no_such"}); err == nil {
+	if err := s.Apply(parser.DropTableStmt{TableNames: []string{"no_such"}}); err == nil {
 		t.Error("expected error")
 	}
 }
 
 func TestApplyDropTable_IfExists_NoError(t *testing.T) {
 	s := newSchema()
-	if err := s.Apply(parser.DropTableStmt{TableName: "no_such", IfExists: true}); err != nil {
+	if err := s.Apply(parser.DropTableStmt{TableNames: []string{"no_such"}, IfExists: true}); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -77,7 +89,7 @@ func TestApplyDropTable_RemovesAssociatedIndexes(t *testing.T) {
 	applyAll(t, s,
 		parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
 		parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id)"},
-		parser.DropTableStmt{TableName: "t"},
+		parser.DropTableStmt{TableNames: []string{"t"}},
 	)
 	if len(s.Indexes) != 0 {
 		t.Errorf("expected no indexes after DROP TABLE, got %d", len(s.Indexes))
@@ -408,5 +420,293 @@ func TestApplyRenameTo_UpdatesIndexes(t *testing.T) {
 	)
 	if s.Indexes[0].TableName != "t2" {
 		t.Errorf("index TableName: %q", s.Indexes[0].TableName)
+	}
+}
+
+// ---- ActionSkip -------------------------------------------------------------
+
+func TestApplyActionSkip(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
+	)
+	// ActionSkip should not error and not change the schema
+	err := s.Apply(parser.AlterTableStmt{TableName: "t", Actions: []parser.AlterAction{
+		{Kind: parser.ActionSkip},
+	}})
+	if err != nil {
+		t.Errorf("unexpected error from ActionSkip: %v", err)
+	}
+	if len(s.Tables[0].Columns) != 1 {
+		t.Error("schema should be unchanged")
+	}
+}
+
+// ---- ALTER INDEX ------------------------------------------------------------
+
+func TestApplyAlterIndex_RenameTo(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
+		parser.CreateIndexStmt{IndexName: "idx_old", TableName: "t", Body: "(id)"},
+		parser.AlterIndexStmt{IndexName: "idx_old", NewName: "idx_new"},
+	)
+	if len(s.Indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(s.Indexes))
+	}
+	if s.Indexes[0].Name != "idx_new" {
+		t.Errorf("Index.Name: %q", s.Indexes[0].Name)
+	}
+	// verify we can still drop by new name (round-trip through applyDropIndex)
+	err := s.Apply(parser.DropIndexStmt{IndexName: "idx_new"})
+	if err != nil {
+		t.Errorf("unexpected error dropping renamed index: %v", err)
+	}
+	if len(s.Indexes) != 0 {
+		t.Errorf("expected 0 indexes after drop, got %d", len(s.Indexes))
+	}
+}
+
+func TestApplyAlterIndex_NotFound(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.AlterIndexStmt{IndexName: "no_idx", NewName: "x"}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+// ---- DROP TYPE --------------------------------------------------------------
+
+func TestApplyDropType(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "status", Labels: []string{"a", "b"}},
+		parser.DropTypeStmt{TypeName: "status"},
+	)
+	if len(s.Types) != 0 {
+		t.Errorf("expected empty Types, got %d", len(s.Types))
+	}
+}
+
+func TestApplyDropType_NotFound(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.DropTypeStmt{TypeName: "no_type"}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestApplyDropType_IfExists_NoError(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.DropTypeStmt{TypeName: "no_type", IfExists: true}); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// ---- ALTER TYPE -------------------------------------------------------------
+
+func TestApplyAlterType_AddValue(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "status", Labels: []string{"active", "inactive"}},
+		parser.AlterTypeStmt{TypeName: "status", Action: parser.AlterTypeAction{
+			Kind:  parser.AlterTypeAddValue,
+			Value: "pending",
+		}},
+	)
+	labels := s.Types[0].Labels
+	if len(labels) != 3 || labels[2] != "pending" {
+		t.Errorf("Labels: %v", labels)
+	}
+}
+
+func TestApplyAlterType_AddValue_IfNotExists_Duplicate(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "status", Labels: []string{"active"}},
+	)
+	// Adding existing label with IF NOT EXISTS should not error
+	err := s.Apply(parser.AlterTypeStmt{TypeName: "status", Action: parser.AlterTypeAction{
+		Kind:        parser.AlterTypeAddValue,
+		Value:       "active",
+		IfNotExists: true,
+	}})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyAlterType_AddValue_Before(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "status", Labels: []string{"a", "c"}},
+		parser.AlterTypeStmt{TypeName: "status", Action: parser.AlterTypeAction{
+			Kind:   parser.AlterTypeAddValue,
+			Value:  "b",
+			Before: "c",
+		}},
+	)
+	labels := s.Types[0].Labels
+	if len(labels) != 3 || labels[1] != "b" || labels[2] != "c" {
+		t.Errorf("Labels: %v", labels)
+	}
+}
+
+func TestApplyAlterType_AddValue_After(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "status", Labels: []string{"a", "c"}},
+		parser.AlterTypeStmt{TypeName: "status", Action: parser.AlterTypeAction{
+			Kind:  parser.AlterTypeAddValue,
+			Value: "b",
+			After: "a",
+		}},
+	)
+	labels := s.Types[0].Labels
+	if len(labels) != 3 || labels[0] != "a" || labels[1] != "b" || labels[2] != "c" {
+		t.Errorf("Labels: %v", labels)
+	}
+}
+
+func TestApplyAlterType_RenameValue(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "status", Labels: []string{"old", "b"}},
+		parser.AlterTypeStmt{TypeName: "status", Action: parser.AlterTypeAction{
+			Kind:     parser.AlterTypeRenameValue,
+			Value:    "old",
+			NewValue: "new",
+		}},
+	)
+	if s.Types[0].Labels[0] != "new" {
+		t.Errorf("Labels[0]: %q", s.Types[0].Labels[0])
+	}
+}
+
+func TestApplyAlterType_RenameTo(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTypeStmt{TypeName: "old_type", Labels: []string{"a"}},
+		parser.AlterTypeStmt{TypeName: "old_type", Action: parser.AlterTypeAction{
+			Kind:    parser.AlterTypeRenameTo,
+			NewName: "new_type",
+		}},
+	)
+	if s.Types[0].Name != "new_type" {
+		t.Errorf("Type.Name: %q", s.Types[0].Name)
+	}
+}
+
+// ---- Generic objects --------------------------------------------------------
+
+func TestApplyCreateObject_View(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "myview", SQL: "CREATE VIEW myview AS SELECT 1"},
+	)
+	if len(s.Objects) != 1 || s.Objects[0].Name != "myview" {
+		t.Errorf("Objects: %+v", s.Objects)
+	}
+}
+
+func TestApplyCreateObject_OrReplace(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE VIEW v AS SELECT 1", OrReplace: false},
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE OR REPLACE VIEW v AS SELECT 2", OrReplace: true},
+	)
+	if len(s.Objects) != 1 {
+		t.Errorf("expected 1 object, got %d", len(s.Objects))
+	}
+	if s.Objects[0].SQL != "CREATE OR REPLACE VIEW v AS SELECT 2" {
+		t.Errorf("SQL not updated: %q", s.Objects[0].SQL)
+	}
+}
+
+func TestApplyCreateObject_Duplicate_NoReplace(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE VIEW v AS SELECT 1"},
+	)
+	err := s.Apply(parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE VIEW v AS SELECT 2"})
+	if err == nil {
+		t.Error("expected error for duplicate CREATE without OR REPLACE")
+	}
+}
+
+func TestApplyDropObject_View(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE VIEW v AS SELECT 1"},
+		parser.DropObjectStmt{Kind: parser.ObjView, Name: "v"},
+	)
+	if len(s.Objects) != 0 {
+		t.Errorf("expected 0 objects, got %d", len(s.Objects))
+	}
+}
+
+func TestApplyDropObject_NotFound(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.DropObjectStmt{Kind: parser.ObjView, Name: "no_view"}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestApplyDropObject_IfExists_NoError(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.DropObjectStmt{Kind: parser.ObjView, Name: "no_view", IfExists: true}); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyObjects_MultipleKinds(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjSchema, Name: "myschema", SQL: "CREATE SCHEMA myschema"},
+		parser.CreateObjectStmt{Kind: parser.ObjExtension, Name: "pg_trgm", SQL: "CREATE EXTENSION pg_trgm"},
+		parser.CreateObjectStmt{Kind: parser.ObjFunction, Name: "f", SQL: "CREATE FUNCTION f() RETURNS void AS $$ $$ LANGUAGE sql"},
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v", SQL: "CREATE VIEW v AS SELECT 1"},
+	)
+	if len(s.Objects) != 4 {
+		t.Errorf("expected 4 objects, got %d", len(s.Objects))
+	}
+}
+
+// ---- ALTER SEQUENCE RENAME TO -----------------------------------------------
+
+func TestApplyAlterSequence_RenameTo(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateSequenceStmt{SeqName: "seq", Body: "START 1"},
+		parser.AlterSequenceStmt{SeqName: "seq", NewName: "seq2"},
+	)
+	if len(s.Sequences) != 1 || s.Sequences[0].Name != "seq2" {
+		t.Errorf("Sequences: %+v", s.Sequences)
+	}
+}
+
+func TestApplyAlterSequence_NotFound(t *testing.T) {
+	s := newSchema()
+	if err := s.Apply(parser.AlterSequenceStmt{SeqName: "no_seq", NewName: "x"}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+// ---- ALTER <object> RENAME TO -----------------------------------------------
+
+func TestApplyAlterObject_ViewRenameTo(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateObjectStmt{Kind: parser.ObjView, Name: "v1", SQL: "CREATE VIEW v1 AS SELECT 1"},
+		parser.AlterObjectStmt{Kind: parser.ObjView, OldName: "v1", NewName: "v2"},
+	)
+	if len(s.Objects) != 1 || s.Objects[0].Name != "v2" {
+		t.Errorf("Objects: %+v", s.Objects)
+	}
+}
+
+func TestApplyAlterObject_NotFound(t *testing.T) {
+	s := newSchema()
+	err := s.Apply(parser.AlterObjectStmt{Kind: parser.ObjView, OldName: "no_view", NewName: "v2"})
+	if err == nil {
+		t.Error("expected error")
 	}
 }

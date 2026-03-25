@@ -14,6 +14,11 @@ func normIdent(s string) string {
 	return strings.ToLower(s)
 }
 
+// objectKey returns the map key for an object: "KIND:normname".
+func objectKey(kind parser.ObjectKind, name string) string {
+	return strings.ToLower(string(kind)) + ":" + strings.ToLower(strings.TrimSpace(name))
+}
+
 // Apply applies a parsed DDL statement to the schema model.
 func (s *Schema) Apply(stmt parser.Statement) error {
 	switch v := stmt.(type) {
@@ -27,12 +32,26 @@ func (s *Schema) Apply(stmt parser.Statement) error {
 		return s.applyCreateIndex(v)
 	case parser.DropIndexStmt:
 		return s.applyDropIndex(v)
+	case parser.AlterIndexStmt:
+		return s.applyAlterIndex(v)
 	case parser.CreateSequenceStmt:
 		return s.applyCreateSequence(v)
 	case parser.DropSequenceStmt:
 		return s.applyDropSequence(v)
 	case parser.CreateTypeStmt:
 		return s.applyCreateType(v)
+	case parser.DropTypeStmt:
+		return s.applyDropType(v)
+	case parser.AlterTypeStmt:
+		return s.applyAlterType(v)
+	case parser.CreateObjectStmt:
+		return s.applyCreateObject(v)
+	case parser.DropObjectStmt:
+		return s.applyDropObject(v)
+	case parser.AlterSequenceStmt:
+		return s.applyAlterSequence(v)
+	case parser.AlterObjectStmt:
+		return s.applyAlterObject(v)
 	case parser.UnknownStmt:
 		s.Unknowns = append(s.Unknowns, v.Raw)
 	}
@@ -74,6 +93,10 @@ func (s *Schema) applyAlterTable(v parser.AlterTableStmt) error {
 
 func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string) error {
 	switch action.Kind {
+	case parser.ActionSkip:
+		// silently do nothing
+		return nil
+
 	case parser.ActionAddColumn:
 		col := action.ColDef
 		if col == nil {
@@ -189,13 +212,22 @@ func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string)
 }
 
 func (s *Schema) applyDropTable(v parser.DropTableStmt) error {
-	key := normIdent(v.TableName)
+	for _, name := range v.TableNames {
+		if err := s.dropOneTable(name, v.IfExists); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Schema) dropOneTable(name string, ifExists bool) error {
+	key := normIdent(name)
 	idx, ok := s.tableIndex[key]
 	if !ok {
-		if v.IfExists {
+		if ifExists {
 			return nil
 		}
-		return fmt.Errorf("DROP TABLE: table not found: %s", v.TableName)
+		return fmt.Errorf("DROP TABLE: table not found: %s", name)
 	}
 	s.Tables = append(s.Tables[:idx], s.Tables[idx+1:]...)
 	delete(s.tableIndex, key)
@@ -211,6 +243,11 @@ func (s *Schema) applyDropTable(v parser.DropTableStmt) error {
 		}
 	}
 	s.Indexes = kept
+	// rebuild indexIndex
+	s.indexIndex = make(map[string]int, len(s.Indexes))
+	for i, ix := range s.Indexes {
+		s.indexIndex[normIdent(ix.Name)] = i
+	}
 	return nil
 }
 
@@ -243,6 +280,19 @@ func (s *Schema) applyDropIndex(v parser.DropIndexStmt) error {
 	for i := idx; i < len(s.Indexes); i++ {
 		s.indexIndex[normIdent(s.Indexes[i].Name)] = i
 	}
+	return nil
+}
+
+func (s *Schema) applyAlterIndex(v parser.AlterIndexStmt) error {
+	oldKey := normIdent(v.IndexName)
+	idx, ok := s.indexIndex[oldKey]
+	if !ok {
+		return fmt.Errorf("ALTER INDEX: index not found: %s", v.IndexName)
+	}
+	newKey := normIdent(v.NewName)
+	s.Indexes[idx].Name = v.NewName
+	delete(s.indexIndex, oldKey)
+	s.indexIndex[newKey] = idx
 	return nil
 }
 
@@ -280,6 +330,156 @@ func (s *Schema) applyCreateType(v parser.CreateTypeStmt) error {
 	}
 	s.typeIndex[key] = len(s.Types)
 	s.Types = append(s.Types, EnumType{Name: v.TypeName, Labels: v.Labels})
+	return nil
+}
+
+func (s *Schema) applyDropType(v parser.DropTypeStmt) error {
+	key := normIdent(v.TypeName)
+	idx, ok := s.typeIndex[key]
+	if !ok {
+		if v.IfExists {
+			return nil
+		}
+		return fmt.Errorf("DROP TYPE: type not found: %s", v.TypeName)
+	}
+	s.Types = append(s.Types[:idx], s.Types[idx+1:]...)
+	delete(s.typeIndex, key)
+	for i := idx; i < len(s.Types); i++ {
+		s.typeIndex[normIdent(s.Types[i].Name)] = i
+	}
+	return nil
+}
+
+func (s *Schema) applyAlterType(v parser.AlterTypeStmt) error {
+	key := normIdent(v.TypeName)
+	idx, ok := s.typeIndex[key]
+	if !ok {
+		return fmt.Errorf("ALTER TYPE: type not found: %s", v.TypeName)
+	}
+
+	switch v.Action.Kind {
+	case parser.AlterTypeAddValue:
+		label := v.Action.Value
+		// Check for existing label
+		for _, l := range s.Types[idx].Labels {
+			if l == label {
+				if v.Action.IfNotExists {
+					return nil
+				}
+				return fmt.Errorf("ALTER TYPE ADD VALUE: label already exists: %s", label)
+			}
+		}
+		labels := s.Types[idx].Labels
+		if v.Action.Before != "" {
+			pos := findLabelIdx(labels, v.Action.Before)
+			if pos < 0 {
+				return fmt.Errorf("ALTER TYPE ADD VALUE: BEFORE label not found: %s", v.Action.Before)
+			}
+			labels = insertLabel(labels, pos, label)
+		} else if v.Action.After != "" {
+			pos := findLabelIdx(labels, v.Action.After)
+			if pos < 0 {
+				return fmt.Errorf("ALTER TYPE ADD VALUE: AFTER label not found: %s", v.Action.After)
+			}
+			labels = insertLabel(labels, pos+1, label)
+		} else {
+			labels = append(labels, label)
+		}
+		s.Types[idx].Labels = labels
+
+	case parser.AlterTypeRenameValue:
+		labels := s.Types[idx].Labels
+		pos := findLabelIdx(labels, v.Action.Value)
+		if pos < 0 {
+			return fmt.Errorf("ALTER TYPE RENAME VALUE: label not found: %s", v.Action.Value)
+		}
+		labels[pos] = v.Action.NewValue
+
+	case parser.AlterTypeRenameTo:
+		newKey := normIdent(v.Action.NewName)
+		s.Types[idx].Name = v.Action.NewName
+		delete(s.typeIndex, key)
+		s.typeIndex[newKey] = idx
+	}
+	return nil
+}
+
+func findLabelIdx(labels []string, label string) int {
+	for i, l := range labels {
+		if l == label {
+			return i
+		}
+	}
+	return -1
+}
+
+func insertLabel(labels []string, pos int, label string) []string {
+	labels = append(labels, "")
+	copy(labels[pos+1:], labels[pos:])
+	labels[pos] = label
+	return labels
+}
+
+func (s *Schema) applyCreateObject(v parser.CreateObjectStmt) error {
+	key := objectKey(v.Kind, v.Name)
+	if idx, exists := s.objectIdx[key]; exists {
+		if v.OrReplace {
+			s.Objects[idx].SQL = v.SQL
+			return nil
+		}
+		return fmt.Errorf("duplicate CREATE %s: %s", v.Kind, v.Name)
+	}
+	s.objectIdx[key] = len(s.Objects)
+	s.Objects = append(s.Objects, GenericObject{
+		Kind: v.Kind,
+		Name: v.Name,
+		SQL:  v.SQL,
+	})
+	return nil
+}
+
+func (s *Schema) applyDropObject(v parser.DropObjectStmt) error {
+	key := objectKey(v.Kind, v.Name)
+	idx, ok := s.objectIdx[key]
+	if !ok {
+		if v.IfExists {
+			return nil
+		}
+		return fmt.Errorf("DROP %s: not found: %s", v.Kind, v.Name)
+	}
+	s.Objects = append(s.Objects[:idx], s.Objects[idx+1:]...)
+	delete(s.objectIdx, key)
+	// re-index remaining objects
+	for i := idx; i < len(s.Objects); i++ {
+		k := objectKey(s.Objects[i].Kind, s.Objects[i].Name)
+		s.objectIdx[k] = i
+	}
+	return nil
+}
+
+func (s *Schema) applyAlterSequence(v parser.AlterSequenceStmt) error {
+	oldKey := normIdent(v.SeqName)
+	idx, ok := s.seqIndex[oldKey]
+	if !ok {
+		return fmt.Errorf("ALTER SEQUENCE: sequence not found: %s", v.SeqName)
+	}
+	newKey := normIdent(v.NewName)
+	s.Sequences[idx].Name = v.NewName
+	delete(s.seqIndex, oldKey)
+	s.seqIndex[newKey] = idx
+	return nil
+}
+
+func (s *Schema) applyAlterObject(v parser.AlterObjectStmt) error {
+	oldKey := objectKey(v.Kind, v.OldName)
+	idx, ok := s.objectIdx[oldKey]
+	if !ok {
+		return fmt.Errorf("ALTER %s: not found: %s", v.Kind, v.OldName)
+	}
+	newKey := objectKey(v.Kind, v.NewName)
+	s.Objects[idx].Name = v.NewName
+	delete(s.objectIdx, oldKey)
+	s.objectIdx[newKey] = idx
 	return nil
 }
 

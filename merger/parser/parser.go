@@ -2,20 +2,28 @@ package parser
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 )
 
 var (
 	reCreateTable    = regexp.MustCompile(`(?i)^CREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:(TEMPORARY|TEMP|UNLOGGED)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)\s*\(`)
+	rePartitionOf    = regexp.MustCompile(`(?i)\s+PARTITION\s+OF\s+`)
 	reCollate        = regexp.MustCompile(`(?i)\s+COLLATE\s+("(?:[^"]|"")*"|\S+)`)
 	reAlterTable     = regexp.MustCompile(`(?i)^ALTER\s+TABLE\s+(?:ONLY\s+)?(\S+)\s+(.+)`)
-	reDropTable      = regexp.MustCompile(`(?i)^DROP\s+TABLE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
+	reDropTable      = regexp.MustCompile(`(?i)^DROP\s+TABLE\s+(?:(IF\s+EXISTS)\s+)?(.+)`)
 	reCreateIndex    = regexp.MustCompile(`(?i)^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)\s*(.*)`)
 	reDropIndex      = regexp.MustCompile(`(?i)^DROP\s+INDEX\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
+	reAlterIndex     = regexp.MustCompile(`(?i)^ALTER\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
 	reCreateSequence = regexp.MustCompile(`(?i)^CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)(.*)`)
 	reDropSequence   = regexp.MustCompile(`(?i)^DROP\s+SEQUENCE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
+	reAlterSeqRename = regexp.MustCompile(`(?i)^ALTER\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
 	reCreateTypeEnum = regexp.MustCompile(`(?i)^CREATE\s+TYPE\s+(\S+)\s+AS\s+ENUM\s*\((.+)\)`)
+	reDropType       = regexp.MustCompile(`(?i)^DROP\s+TYPE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
+	reAlterType      = regexp.MustCompile(`(?i)^ALTER\s+TYPE\s+(\S+)\s+(.+)`)
+	reAlterColUsing  = regexp.MustCompile(`(?i)\s+USING\s+.+$`)
+	reAlterObjRename = regexp.MustCompile(`(?i)^ALTER\s+\S+\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
 )
 
 // normalizeIdent removes surrounding double-quotes and lowercases for key lookup.
@@ -48,12 +56,79 @@ func Parse(sql string) (Statement, error) {
 		return parseCreateIndex(sql)
 	case strings.HasPrefix(upper, "DROP INDEX"):
 		return parseDropIndex(sql)
+	case strings.HasPrefix(upper, "ALTER INDEX"):
+		return parseAlterIndex(sql)
 	case strings.HasPrefix(upper, "CREATE SEQUENCE"):
 		return parseCreateSequence(sql)
 	case strings.HasPrefix(upper, "DROP SEQUENCE"):
 		return parseDropSequence(sql)
 	case strings.HasPrefix(upper, "CREATE TYPE"):
 		return parseCreateType(sql)
+	case strings.HasPrefix(upper, "DROP TYPE"):
+		return parseDropType(sql)
+	case strings.HasPrefix(upper, "ALTER TYPE"):
+		return parseAlterType(sql)
+	case strings.HasPrefix(upper, "ALTER SEQUENCE"):
+		return parseAlterSequence(sql)
+	case strings.HasPrefix(upper, "ALTER VIEW"),
+		strings.HasPrefix(upper, "ALTER MATERIALIZED VIEW"),
+		strings.HasPrefix(upper, "ALTER SCHEMA"),
+		strings.HasPrefix(upper, "ALTER FUNCTION"),
+		strings.HasPrefix(upper, "ALTER PROCEDURE"),
+		strings.HasPrefix(upper, "ALTER TRIGGER"),
+		strings.HasPrefix(upper, "ALTER DOMAIN"),
+		strings.HasPrefix(upper, "ALTER EXTENSION"),
+		strings.HasPrefix(upper, "ALTER POLICY"),
+		strings.HasPrefix(upper, "ALTER RULE"):
+		return parseAlterObject(sql)
+	// Generic tracked objects — check longer prefixes first
+	case strings.HasPrefix(upper, "CREATE OR REPLACE MATERIALIZED VIEW"),
+		strings.HasPrefix(upper, "CREATE MATERIALIZED VIEW"):
+		return parseCreateObject(sql, ObjMatView)
+	case strings.HasPrefix(upper, "DROP MATERIALIZED VIEW"):
+		return parseDropObject(sql, ObjMatView)
+	case strings.HasPrefix(upper, "CREATE OR REPLACE VIEW"),
+		strings.HasPrefix(upper, "CREATE VIEW"):
+		return parseCreateObject(sql, ObjView)
+	case strings.HasPrefix(upper, "DROP VIEW"):
+		return parseDropObject(sql, ObjView)
+	case strings.HasPrefix(upper, "CREATE SCHEMA"):
+		return parseCreateObject(sql, ObjSchema)
+	case strings.HasPrefix(upper, "DROP SCHEMA"):
+		return parseDropObject(sql, ObjSchema)
+	case strings.HasPrefix(upper, "CREATE EXTENSION"):
+		return parseCreateObject(sql, ObjExtension)
+	case strings.HasPrefix(upper, "DROP EXTENSION"):
+		return parseDropObject(sql, ObjExtension)
+	case strings.HasPrefix(upper, "CREATE OR REPLACE FUNCTION"),
+		strings.HasPrefix(upper, "CREATE FUNCTION"):
+		return parseCreateObject(sql, ObjFunction)
+	case strings.HasPrefix(upper, "DROP FUNCTION"):
+		return parseDropObject(sql, ObjFunction)
+	case strings.HasPrefix(upper, "CREATE OR REPLACE PROCEDURE"),
+		strings.HasPrefix(upper, "CREATE PROCEDURE"):
+		return parseCreateObject(sql, ObjProcedure)
+	case strings.HasPrefix(upper, "DROP PROCEDURE"):
+		return parseDropObject(sql, ObjProcedure)
+	case strings.HasPrefix(upper, "CREATE CONSTRAINT TRIGGER"),
+		strings.HasPrefix(upper, "CREATE OR REPLACE TRIGGER"),
+		strings.HasPrefix(upper, "CREATE TRIGGER"):
+		return parseCreateObject(sql, ObjTrigger)
+	case strings.HasPrefix(upper, "DROP TRIGGER"):
+		return parseDropObject(sql, ObjTrigger)
+	case strings.HasPrefix(upper, "CREATE DOMAIN"):
+		return parseCreateObject(sql, ObjDomain)
+	case strings.HasPrefix(upper, "DROP DOMAIN"):
+		return parseDropObject(sql, ObjDomain)
+	case strings.HasPrefix(upper, "CREATE POLICY"):
+		return parseCreateObject(sql, ObjPolicy)
+	case strings.HasPrefix(upper, "DROP POLICY"):
+		return parseDropObject(sql, ObjPolicy)
+	case strings.HasPrefix(upper, "CREATE OR REPLACE RULE"),
+		strings.HasPrefix(upper, "CREATE RULE"):
+		return parseCreateObject(sql, ObjRule)
+	case strings.HasPrefix(upper, "DROP RULE"):
+		return parseDropObject(sql, ObjRule)
 	default:
 		return UnknownStmt{Raw: sql}, nil
 	}
@@ -62,6 +137,10 @@ func Parse(sql string) (Statement, error) {
 func parseCreateTable(sql string) (Statement, error) {
 	m := reCreateTable.FindStringSubmatchIndex(sql)
 	if m == nil {
+		// PARTITION OF form and other complex variants pass through verbatim.
+		if rePartitionOf.MatchString(sql) {
+			return UnknownStmt{Raw: sql}, nil
+		}
 		return nil, fmt.Errorf("cannot parse CREATE TABLE: %s", sql[:min(len(sql), 60)])
 	}
 	// group 1: TEMPORARY|TEMP|UNLOGGED (m[2]:m[3], -1 if absent)
@@ -339,15 +418,15 @@ func indexCI(s, sub string) int {
 // --- ALTER TABLE ---
 
 var (
-	reAddCol       = regexp.MustCompile(`(?i)^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(.+)`)
-	reDropCol      = regexp.MustCompile(`(?i)^DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?(\S+)`)
-	reAlterColType = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+(?:SET\s+DATA\s+)?TYPE\s+(.+)`)
-	reAlterColSet  = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+(SET\s+DEFAULT\s+(.+)|DROP\s+DEFAULT|SET\s+NOT\s+NULL|DROP\s+NOT\s+NULL)`)
-	reRenameCol    = regexp.MustCompile(`(?i)^RENAME\s+COLUMN\s+(\S+)\s+TO\s+(\S+)`)
-	reRenameTo     = regexp.MustCompile(`(?i)^RENAME\s+TO\s+(\S+)`)
-	reAddConstr    = regexp.MustCompile(`(?i)^ADD\s+CONSTRAINT\s+(\S+)\s+(.+)`)
+	reAddCol        = regexp.MustCompile(`(?i)^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(.+)`)
+	reDropCol       = regexp.MustCompile(`(?i)^DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+	reAlterColType  = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+(?:SET\s+DATA\s+)?TYPE\s+(.+)`)
+	reAlterColSet   = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+(SET\s+DEFAULT\s+(.+)|DROP\s+DEFAULT|SET\s+NOT\s+NULL|DROP\s+NOT\s+NULL)`)
+	reRenameCol     = regexp.MustCompile(`(?i)^RENAME\s+COLUMN\s+(\S+)\s+TO\s+(\S+)`)
+	reRenameTo      = regexp.MustCompile(`(?i)^RENAME\s+TO\s+(\S+)`)
+	reAddConstr     = regexp.MustCompile(`(?i)^ADD\s+CONSTRAINT\s+(\S+)\s+(.+)`)
 	reAddConstrAnon = regexp.MustCompile(`(?i)^ADD\s+(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK)\s*(.*)`)
-	reDropConstr   = regexp.MustCompile(`(?i)^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+	reDropConstr    = regexp.MustCompile(`(?i)^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\S+)`)
 )
 
 func parseAlterTable(sql string) (Statement, error) {
@@ -363,7 +442,7 @@ func parseAlterTable(sql string) (Statement, error) {
 	var actions []AlterAction
 	for _, part := range actionParts {
 		part = strings.TrimSpace(part)
-		a, err := parseAlterAction(part)
+		a, err := parseAlterAction(tableName, part)
 		if err != nil {
 			return nil, fmt.Errorf("ALTER TABLE %s: %w", tableName, err)
 		}
@@ -373,7 +452,7 @@ func parseAlterTable(sql string) (Statement, error) {
 	return AlterTableStmt{TableName: tableName, Actions: actions}, nil
 }
 
-func parseAlterAction(s string) (AlterAction, error) {
+func parseAlterAction(tableName, s string) (AlterAction, error) {
 	upper := strings.ToUpper(s)
 
 	if m := reAddCol.FindStringSubmatch(s); m != nil {
@@ -387,7 +466,9 @@ func parseAlterAction(s string) (AlterAction, error) {
 		return AlterAction{Kind: ActionDropColumn, Column: m[1]}, nil
 	}
 	if m := reAlterColType.FindStringSubmatch(s); m != nil {
-		return AlterAction{Kind: ActionAlterColumnType, Column: m[1], DataType: strings.TrimSpace(m[2])}, nil
+		// Strip trailing USING clause — it's execution-time only, not part of the type name.
+		dataType := strings.TrimSpace(reAlterColUsing.ReplaceAllString(m[2], ""))
+		return AlterAction{Kind: ActionAlterColumnType, Column: m[1], DataType: dataType}, nil
 	}
 	if m := reAlterColSet.FindStringSubmatch(s); m != nil {
 		col := m[1]
@@ -420,8 +501,53 @@ func parseAlterAction(s string) (AlterAction, error) {
 		return AlterAction{Kind: ActionDropConstraint, Constraint: TableConstraint{Name: m[1]}}, nil
 	}
 
-	_ = upper
-	return AlterAction{}, fmt.Errorf("unrecognized ALTER TABLE action: %s", s[:min(len(s), 60)])
+	// Unrecognized action — warn and skip rather than error
+	if isSkippableAlterAction(upper) {
+		fmt.Fprintf(os.Stderr, "warning: ALTER TABLE %s: unrecognized action skipped: %s\n", tableName, s[:min(len(s), 80)])
+		return AlterAction{Kind: ActionSkip}, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "warning: ALTER TABLE %s: unrecognized action skipped: %s\n", tableName, s[:min(len(s), 80)])
+	return AlterAction{Kind: ActionSkip}, nil
+}
+
+// isSkippableAlterAction returns true for ALTER TABLE actions we know are safe to skip.
+func isSkippableAlterAction(upper string) bool {
+	skippablePrefixes := []string{
+		"SET STATISTICS",
+		"SET STORAGE",
+		"SET COMPRESSION",
+		"SET (", "RESET (",
+		"ADD GENERATED",
+		"SET GENERATED",
+		"DROP IDENTITY",
+		"SET SCHEMA",
+		"SET TABLESPACE",
+		"SET WITHOUT CLUSTER",
+		"SET ACCESS METHOD",
+		"CLUSTER ON",
+		"ENABLE TRIGGER", "DISABLE TRIGGER",
+		"ENABLE RULE", "DISABLE RULE",
+		"ENABLE ROW LEVEL SECURITY", "DISABLE ROW LEVEL SECURITY",
+		"FORCE ROW LEVEL SECURITY", "NO FORCE ROW LEVEL SECURITY",
+		"ATTACH PARTITION",
+		"DETACH PARTITION",
+		"VALIDATE CONSTRAINT",
+		"INHERIT ", "NO INHERIT ",
+		"OF ", "NOT OF",
+		"OWNER TO",
+		"ENABLE ALWAYS TRIGGER",
+		"ENABLE REPLICA TRIGGER",
+		"ENABLE ALWAYS RULE",
+		"ENABLE REPLICA RULE",
+		"ALTER COLUMN",
+	}
+	for _, pfx := range skippablePrefixes {
+		if strings.HasPrefix(upper, pfx) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildColumnDefStr(col ColumnDef) string {
@@ -441,9 +567,33 @@ func parseDropTable(sql string) (Statement, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot parse DROP TABLE: %s", sql[:min(len(sql), 60)])
 	}
+	ifExists := m[1] != ""
+	// m[2] contains everything after IF EXISTS (or after DROP TABLE)
+	// strip trailing CASCADE/RESTRICT
+	rest := strings.TrimSpace(m[2])
+	rest = strings.TrimSuffix(rest, ";")
+	upper := strings.ToUpper(rest)
+	for _, suffix := range []string{" CASCADE", " RESTRICT"} {
+		if strings.HasSuffix(upper, suffix) {
+			rest = rest[:len(rest)-len(suffix)]
+			upper = strings.ToUpper(rest)
+		}
+	}
+	// split multiple table names
+	parts := strings.Split(rest, ",")
+	var names []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			names = append(names, p)
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("cannot parse DROP TABLE: no table names found in: %s", sql[:min(len(sql), 60)])
+	}
 	return DropTableStmt{
-		TableName: strings.TrimSuffix(m[2], ";"),
-		IfExists:  m[1] != "",
+		TableNames: names,
+		IfExists:   ifExists,
 	}, nil
 }
 
@@ -468,6 +618,18 @@ func parseDropIndex(sql string) (Statement, error) {
 	return DropIndexStmt{
 		IfExists:  m[1] != "",
 		IndexName: strings.TrimSuffix(m[2], ";"),
+	}, nil
+}
+
+func parseAlterIndex(sql string) (Statement, error) {
+	m := reAlterIndex.FindStringSubmatch(sql)
+	if m == nil {
+		// Other ALTER INDEX forms → pass through
+		return UnknownStmt{Raw: sql}, nil
+	}
+	return AlterIndexStmt{
+		IndexName: m[1],
+		NewName:   strings.TrimSuffix(m[2], ";"),
 	}, nil
 }
 
@@ -506,8 +668,316 @@ func parseCreateType(sql string) (Statement, error) {
 	return CreateTypeStmt{TypeName: m[1], Labels: labels}, nil
 }
 
+func parseDropType(sql string) (Statement, error) {
+	m := reDropType.FindStringSubmatch(sql)
+	if m == nil {
+		return nil, fmt.Errorf("cannot parse DROP TYPE: %s", sql[:min(len(sql), 60)])
+	}
+	return DropTypeStmt{
+		IfExists: m[1] != "",
+		TypeName: strings.TrimSuffix(m[2], ";"),
+	}, nil
+}
+
+var (
+	reAlterTypeAddValue    = regexp.MustCompile(`(?i)^ADD\s+VALUE\s+(?:(IF\s+NOT\s+EXISTS)\s+)?'([^']*)'(?:\s+(BEFORE|AFTER)\s+'([^']*)')?`)
+	reAlterTypeRenameValue = regexp.MustCompile(`(?i)^RENAME\s+VALUE\s+'([^']*)'\s+TO\s+'([^']*)'`)
+	reAlterTypeRenameTo    = regexp.MustCompile(`(?i)^RENAME\s+TO\s+(\S+)`)
+)
+
+func parseAlterType(sql string) (Statement, error) {
+	m := reAlterType.FindStringSubmatch(sql)
+	if m == nil {
+		return UnknownStmt{Raw: sql}, nil
+	}
+	typeName := m[1]
+	actionStr := strings.TrimSpace(m[2])
+
+	if am := reAlterTypeAddValue.FindStringSubmatch(actionStr); am != nil {
+		act := AlterTypeAction{
+			Kind:        AlterTypeAddValue,
+			Value:       am[2],
+			IfNotExists: am[1] != "",
+		}
+		if am[3] != "" {
+			pos := strings.ToUpper(am[3])
+			if pos == "BEFORE" {
+				act.Before = am[4]
+			} else {
+				act.After = am[4]
+			}
+		}
+		return AlterTypeStmt{TypeName: typeName, Action: act}, nil
+	}
+
+	if am := reAlterTypeRenameValue.FindStringSubmatch(actionStr); am != nil {
+		return AlterTypeStmt{TypeName: typeName, Action: AlterTypeAction{
+			Kind:     AlterTypeRenameValue,
+			Value:    am[1],
+			NewValue: am[2],
+		}}, nil
+	}
+
+	if am := reAlterTypeRenameTo.FindStringSubmatch(actionStr); am != nil {
+		return AlterTypeStmt{TypeName: typeName, Action: AlterTypeAction{
+			Kind:    AlterTypeRenameTo,
+			NewName: strings.TrimSuffix(am[1], ";"),
+		}}, nil
+	}
+
+	// Other ALTER TYPE actions → pass through
+	return UnknownStmt{Raw: sql}, nil
+}
+
+// --- Generic object parsing ---
+
+// extractObjectName extracts the name from a CREATE/DROP statement for the given kind.
+// Returns the normalized key (e.g. "name_on_tablename" for triggers/policies/rules).
+func extractCreateObjectName(sql string, kind ObjectKind) string {
+	upper := strings.ToUpper(sql)
+
+	switch kind {
+	case ObjView:
+		// CREATE [OR REPLACE] VIEW [IF NOT EXISTS] name
+		re := regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjMatView:
+		// CREATE [OR REPLACE] MATERIALIZED VIEW [IF NOT EXISTS] name
+		re := regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?MATERIALIZED\s+VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjSchema:
+		re := regexp.MustCompile(`(?i)^CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjExtension:
+		re := regexp.MustCompile(`(?i)^CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjFunction:
+		re := regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\S+?)(?:\s*\(|$)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjProcedure:
+		re := regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\S+?)(?:\s*\(|$)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjTrigger:
+		// CREATE [CONSTRAINT] [OR REPLACE] TRIGGER name ... ON tablename
+		re := regexp.MustCompile(`(?i)^CREATE\s+(?:CONSTRAINT\s+)?(?:OR\s+REPLACE\s+)?TRIGGER\s+(\S+)`)
+		reOn := regexp.MustCompile(`(?i)\s+ON\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			name := normalizeIdent(m[1])
+			if mOn := reOn.FindStringSubmatch(sql); mOn != nil {
+				table := normalizeIdent(mOn[1])
+				return name + "_on_" + table
+			}
+			return name
+		}
+	case ObjDomain:
+		re := regexp.MustCompile(`(?i)^CREATE\s+DOMAIN\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjPolicy:
+		// CREATE POLICY name ON tablename
+		re := regexp.MustCompile(`(?i)^CREATE\s+POLICY\s+(\S+)\s+ON\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1]) + "_on_" + normalizeIdent(m[2])
+		}
+	case ObjRule:
+		// CREATE [OR REPLACE] RULE name AS ON event TO tablename
+		re := regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?RULE\s+(\S+)\s+AS\s+ON\s+\S+\s+TO\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1]) + "_on_" + normalizeIdent(m[2])
+		}
+	}
+	_ = upper
+	return ""
+}
+
+func extractDropObjectName(sql string, kind ObjectKind) string {
+	switch kind {
+	case ObjView:
+		re := regexp.MustCompile(`(?i)^DROP\s+VIEW\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(strings.TrimSuffix(m[1], ";"))
+		}
+	case ObjMatView:
+		re := regexp.MustCompile(`(?i)^DROP\s+MATERIALIZED\s+VIEW\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(strings.TrimSuffix(m[1], ";"))
+		}
+	case ObjSchema:
+		re := regexp.MustCompile(`(?i)^DROP\s+SCHEMA\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(strings.TrimSuffix(m[1], ";"))
+		}
+	case ObjExtension:
+		re := regexp.MustCompile(`(?i)^DROP\s+EXTENSION\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(strings.TrimSuffix(m[1], ";"))
+		}
+	case ObjFunction:
+		re := regexp.MustCompile(`(?i)^DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\(|\s*;|$)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjProcedure:
+		re := regexp.MustCompile(`(?i)^DROP\s+PROCEDURE\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\(|\s*;|$)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1])
+		}
+	case ObjTrigger:
+		// DROP TRIGGER [IF EXISTS] name ON tablename
+		re := regexp.MustCompile(`(?i)^DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1]) + "_on_" + normalizeIdent(strings.TrimSuffix(m[2], ";"))
+		}
+	case ObjDomain:
+		re := regexp.MustCompile(`(?i)^DROP\s+DOMAIN\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(strings.TrimSuffix(m[1], ";"))
+		}
+	case ObjPolicy:
+		re := regexp.MustCompile(`(?i)^DROP\s+POLICY\s+(?:IF\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1]) + "_on_" + normalizeIdent(strings.TrimSuffix(m[2], ";"))
+		}
+	case ObjRule:
+		re := regexp.MustCompile(`(?i)^DROP\s+RULE\s+(?:IF\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)`)
+		if m := re.FindStringSubmatch(sql); m != nil {
+			return normalizeIdent(m[1]) + "_on_" + normalizeIdent(strings.TrimSuffix(m[2], ";"))
+		}
+	}
+	return ""
+}
+
+func isOrReplace(sql string) bool {
+	upper := strings.ToUpper(sql)
+	return strings.Contains(upper, "OR REPLACE")
+}
+
+func parseCreateObject(sql string, kind ObjectKind) (Statement, error) {
+	name := extractCreateObjectName(sql, kind)
+	if name == "" {
+		// Fall back to unknown if we cannot extract the name
+		return UnknownStmt{Raw: sql}, nil
+	}
+	return CreateObjectStmt{
+		Kind:      kind,
+		Name:      name,
+		OrReplace: isOrReplace(sql),
+		SQL:       sql,
+	}, nil
+}
+
+func parseDropObject(sql string, kind ObjectKind) (Statement, error) {
+	name := extractDropObjectName(sql, kind)
+	if name == "" {
+		return UnknownStmt{Raw: sql}, nil
+	}
+	upper := strings.ToUpper(sql)
+	ifExists := strings.Contains(upper, "IF EXISTS")
+	return DropObjectStmt{
+		Kind:     kind,
+		Name:     name,
+		IfExists: ifExists,
+	}, nil
+}
+
+func parseAlterSequence(sql string) (Statement, error) {
+	if m := reAlterSeqRename.FindStringSubmatch(sql); m != nil {
+		return AlterSequenceStmt{
+			SeqName: m[1],
+			NewName: strings.TrimSuffix(m[2], ";"),
+		}, nil
+	}
+	// Other ALTER SEQUENCE forms (SET, RESTART, etc.) → pass through
+	return UnknownStmt{Raw: sql}, nil
+}
+
+// alterObjRenameEntry describes how to detect a RENAME TO for a generic object kind.
+type alterObjRenameEntry struct {
+	prefix string
+	kind   ObjectKind
+	re     *regexp.Regexp
+}
+
+// alterObjRenameEntries lists RENAME TO patterns for each tracked generic object kind.
+// Longer prefixes (MATERIALIZED VIEW) must appear before shorter ones (VIEW).
+var alterObjRenameEntries = []alterObjRenameEntry{
+	{"ALTER MATERIALIZED VIEW", ObjMatView, regexp.MustCompile(`(?i)^ALTER\s+MATERIALIZED\s+VIEW\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER VIEW", ObjView, regexp.MustCompile(`(?i)^ALTER\s+VIEW\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER SCHEMA", ObjSchema, regexp.MustCompile(`(?i)^ALTER\s+SCHEMA\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER EXTENSION", ObjExtension, regexp.MustCompile(`(?i)^ALTER\s+EXTENSION\s+(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER FUNCTION", ObjFunction, regexp.MustCompile(`(?i)^ALTER\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\([^)]*\))?\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER PROCEDURE", ObjProcedure, regexp.MustCompile(`(?i)^ALTER\s+PROCEDURE\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\([^)]*\))?\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER DOMAIN", ObjDomain, regexp.MustCompile(`(?i)^ALTER\s+DOMAIN\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+}
+
+// alterObjTableScopedEntries handles objects whose key includes "_on_<table>".
+type alterObjTableScopedEntry struct {
+	prefix string
+	kind   ObjectKind
+	re     *regexp.Regexp // groups: 1=name, 2=table, 3=newname
+}
+
+var alterObjTableScopedEntries = []alterObjTableScopedEntry{
+	{"ALTER TRIGGER", ObjTrigger, regexp.MustCompile(`(?i)^ALTER\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER POLICY", ObjPolicy, regexp.MustCompile(`(?i)^ALTER\s+POLICY\s+(\S+)\s+ON\s+(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+	{"ALTER RULE", ObjRule, regexp.MustCompile(`(?i)^ALTER\s+RULE\s+(\S+)\s+ON\s+(\S+)\s+RENAME\s+TO\s+(\S+)`)},
+}
+
+func parseAlterObject(sql string) (Statement, error) {
+	upper := strings.ToUpper(sql)
+
+	// Table-scoped objects (TRIGGER, POLICY, RULE) whose key is "name_on_table"
+	for _, e := range alterObjTableScopedEntries {
+		if strings.HasPrefix(upper, e.prefix) {
+			if m := e.re.FindStringSubmatch(sql); m != nil {
+				table := normalizeIdent(strings.TrimSuffix(m[2], ";"))
+				oldName := normalizeIdent(m[1]) + "_on_" + table
+				newName := normalizeIdent(strings.TrimSuffix(m[3], ";")) + "_on_" + table
+				return AlterObjectStmt{Kind: e.kind, OldName: oldName, NewName: newName}, nil
+			}
+			return UnknownStmt{Raw: sql}, nil
+		}
+	}
+
+	// Simple objects whose key is just the name
+	for _, e := range alterObjRenameEntries {
+		if strings.HasPrefix(upper, e.prefix) {
+			if m := e.re.FindStringSubmatch(sql); m != nil {
+				return AlterObjectStmt{
+					Kind:    e.kind,
+					OldName: normalizeIdent(m[1]),
+					NewName: normalizeIdent(strings.TrimSuffix(m[2], ";")),
+				}, nil
+			}
+			return UnknownStmt{Raw: sql}, nil
+		}
+	}
+
+	return UnknownStmt{Raw: sql}, nil
+}
+
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

@@ -8,9 +8,16 @@ const (
 	StmtDropTable
 	StmtCreateIndex
 	StmtDropIndex
+	StmtAlterIndex
 	StmtCreateSequence
 	StmtDropSequence
 	StmtCreateType
+	StmtDropType
+	StmtAlterType
+	StmtCreateObject
+	StmtDropObject
+	StmtAlterSequence
+	StmtAlterObject
 	StmtUnknown
 )
 
@@ -32,6 +39,7 @@ const (
 	ActionRenameTo
 	ActionAddConstraint
 	ActionDropConstraint
+	ActionSkip // unrecognized action — silently ignored
 )
 
 type AlterAction struct {
@@ -72,8 +80,8 @@ type AlterTableStmt struct {
 }
 
 type DropTableStmt struct {
-	TableName string
-	IfExists  bool
+	TableNames []string
+	IfExists   bool
 }
 
 type CreateIndexStmt struct {
@@ -86,6 +94,11 @@ type CreateIndexStmt struct {
 type DropIndexStmt struct {
 	IndexName string
 	IfExists  bool
+}
+
+type AlterIndexStmt struct {
+	IndexName string
+	NewName   string
 }
 
 type CreateSequenceStmt struct {
@@ -103,16 +116,97 @@ type CreateTypeStmt struct {
 	Labels   []string
 }
 
+type DropTypeStmt struct {
+	TypeName string
+	IfExists bool
+}
+
+type AlterTypeActionKind int
+
+const (
+	AlterTypeAddValue AlterTypeActionKind = iota
+	AlterTypeRenameValue
+	AlterTypeRenameTo
+)
+
+type AlterTypeAction struct {
+	Kind        AlterTypeActionKind
+	Value       string  // label to add / old label to rename
+	NewValue    string  // new label name (for RENAME VALUE)
+	NewName     string  // new type name (for RENAME TO)
+	IfNotExists bool    // ADD VALUE IF NOT EXISTS
+	Before      string  // BEFORE existing_label
+	After       string  // AFTER existing_label
+}
+
+type AlterTypeStmt struct {
+	TypeName string
+	Action   AlterTypeAction
+}
+
+// ObjectKind identifies the kind of generic tracked DDL object.
+type ObjectKind string
+
+const (
+	ObjView      ObjectKind = "VIEW"
+	ObjMatView   ObjectKind = "MATERIALIZED VIEW"
+	ObjSchema    ObjectKind = "SCHEMA"
+	ObjExtension ObjectKind = "EXTENSION"
+	ObjFunction  ObjectKind = "FUNCTION"
+	ObjProcedure ObjectKind = "PROCEDURE"
+	ObjTrigger   ObjectKind = "TRIGGER"
+	ObjDomain    ObjectKind = "DOMAIN"
+	ObjPolicy    ObjectKind = "POLICY"
+	ObjRule      ObjectKind = "RULE"
+)
+
+// CreateObjectStmt represents CREATE for any generic tracked object.
+type CreateObjectStmt struct {
+	Kind      ObjectKind
+	Name      string // normalized key (e.g. "name_on_table" for triggers/policies/rules)
+	OrReplace bool
+	SQL       string // verbatim full SQL
+}
+
+// DropObjectStmt represents DROP for any generic tracked object.
+type DropObjectStmt struct {
+	Kind     ObjectKind
+	Name     string // normalized key
+	IfExists bool
+}
+
+// AlterSequenceStmt represents ALTER SEQUENCE ... RENAME TO.
+type AlterSequenceStmt struct {
+	SeqName string
+	NewName string
+}
+
+// AlterObjectStmt represents ALTER <generic-object> ... RENAME TO.
+// OldName and NewName use the same normalized key format as CreateObjectStmt.Name
+// (e.g. "trigname_on_tablename" for triggers/policies/rules).
+type AlterObjectStmt struct {
+	Kind    ObjectKind
+	OldName string
+	NewName string
+}
+
 type UnknownStmt struct {
 	Raw string
 }
 
-func (s CreateTableStmt) stmtKind() StatementKind  { return StmtCreateTable }
-func (s AlterTableStmt) stmtKind() StatementKind   { return StmtAlterTable }
-func (s DropTableStmt) stmtKind() StatementKind    { return StmtDropTable }
-func (s CreateIndexStmt) stmtKind() StatementKind  { return StmtCreateIndex }
-func (s DropIndexStmt) stmtKind() StatementKind    { return StmtDropIndex }
+func (s CreateTableStmt) stmtKind() StatementKind   { return StmtCreateTable }
+func (s AlterTableStmt) stmtKind() StatementKind    { return StmtAlterTable }
+func (s DropTableStmt) stmtKind() StatementKind     { return StmtDropTable }
+func (s CreateIndexStmt) stmtKind() StatementKind   { return StmtCreateIndex }
+func (s DropIndexStmt) stmtKind() StatementKind     { return StmtDropIndex }
+func (s AlterIndexStmt) stmtKind() StatementKind    { return StmtAlterIndex }
 func (s CreateSequenceStmt) stmtKind() StatementKind { return StmtCreateSequence }
-func (s DropSequenceStmt) stmtKind() StatementKind { return StmtDropSequence }
-func (s CreateTypeStmt) stmtKind() StatementKind   { return StmtCreateType }
-func (s UnknownStmt) stmtKind() StatementKind      { return StmtUnknown }
+func (s DropSequenceStmt) stmtKind() StatementKind  { return StmtDropSequence }
+func (s CreateTypeStmt) stmtKind() StatementKind    { return StmtCreateType }
+func (s DropTypeStmt) stmtKind() StatementKind      { return StmtDropType }
+func (s AlterTypeStmt) stmtKind() StatementKind     { return StmtAlterType }
+func (s CreateObjectStmt) stmtKind() StatementKind  { return StmtCreateObject }
+func (s DropObjectStmt) stmtKind() StatementKind    { return StmtDropObject }
+func (s AlterSequenceStmt) stmtKind() StatementKind { return StmtAlterSequence }
+func (s AlterObjectStmt) stmtKind() StatementKind   { return StmtAlterObject }
+func (s UnknownStmt) stmtKind() StatementKind       { return StmtUnknown }
