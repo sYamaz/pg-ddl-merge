@@ -46,6 +46,8 @@ func (s *Schema) applyCreateTable(v parser.CreateTableStmt) error {
 	}
 	t := &Table{
 		Name:        v.TableName,
+		Temporary:   v.Temporary,
+		Unlogged:    v.Unlogged,
 		Columns:     v.Columns,
 		Constraints: v.Constraints,
 	}

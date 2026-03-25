@@ -43,6 +43,32 @@ func TestEmit_SimpleTable(t *testing.T) {
 	}
 }
 
+func TestEmit_TemporaryTable(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateTableStmt{
+		TableName: "tmp",
+		Temporary: true,
+		Columns:   []parser.ColumnDef{{Name: "id", DataType: "int"}},
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE TEMPORARY TABLE tmp (") {
+		t.Errorf("expected TEMPORARY TABLE: %s", got)
+	}
+}
+
+func TestEmit_UnloggedTable(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateTableStmt{
+		TableName: "logs",
+		Unlogged:  true,
+		Columns:   []parser.ColumnDef{{Name: "id", DataType: "int"}},
+	})
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE UNLOGGED TABLE logs (") {
+		t.Errorf("expected UNLOGGED TABLE: %s", got)
+	}
+}
+
 func TestEmit_ColumnNotNullDefault(t *testing.T) {
 	s := newSchema()
 	defVal := "0"

@@ -208,8 +208,8 @@ PostgreSQL 16 `CREATE TABLE` の構文要素ごとの対応状況。
 |------|------|------|
 | `CREATE TABLE name (...)` | ✅ | |
 | `CREATE TABLE IF NOT EXISTS` | ✅ | |
-| `CREATE TEMPORARY TABLE` / `CREATE TEMP TABLE` | ❌ | パースエラー（TEMPORARY が tableName に入る） |
-| `CREATE UNLOGGED TABLE` | ❌ | 同上 |
+| `CREATE TEMPORARY TABLE` / `CREATE TEMP TABLE` | ✅ | `Table.Temporary=true` として追跡・出力 |
+| `CREATE UNLOGGED TABLE` | ✅ | `Table.Unlogged=true` として追跡・出力 |
 
 ### カラム定義
 
@@ -217,17 +217,17 @@ PostgreSQL 16 `CREATE TABLE` の構文要素ごとの対応状況。
 |------|------|------|
 | `name data_type` | ✅ | |
 | `NOT NULL` | ✅ | |
-| `NULL`（明示） | ❌ | テストなし、パース未確認 |
+| `NULL`（明示） | ✅ | 除去して NotNull=false 扱い |
 | `DEFAULT expr` | ✅ | |
 | `PRIMARY KEY`（カラムインライン） | 🔶 | InlineConstraints に verbatim 保持 |
 | `UNIQUE`（カラムインライン） | 🔶 | InlineConstraints に verbatim 保持 |
-| `REFERENCES reftable`（カラムインライン FK） | 🔶 | InlineConstraints に verbatim 保持 |
+| `REFERENCES reftable`（カラムインライン FK） | 🔶 | InlineConstraints に verbatim 保持（ON DELETE/UPDATE 等含む） |
 | `CHECK (expr)`（カラムインライン） | 🔶 | InlineConstraints に verbatim 保持 |
-| `GENERATED ALWAYS AS (expr) STORED` | 🔶 | InlineConstraints に verbatim 保持、専用テストなし |
-| `GENERATED { ALWAYS \| BY DEFAULT } AS IDENTITY` | 🔶 | InlineConstraints に verbatim 保持、専用テストなし |
-| `COLLATE collation` | ❌ | 型の一部として不正確に扱われる可能性あり |
-| `COMPRESSION method` | ❌ | |
-| `STORAGE { PLAIN \| EXTERNAL \| EXTENDED \| MAIN }` | ❌ | |
+| `GENERATED ALWAYS AS (expr) STORED` | ✅ | InlineConstraints に verbatim 保持・テストあり |
+| `GENERATED { ALWAYS \| BY DEFAULT } AS IDENTITY` | ✅ | InlineConstraints に verbatim 保持・テストあり |
+| `COLLATE collation` | ✅ | `ColumnDef.Collation` フィールドとして個別保持・出力 |
+| `COMPRESSION method` | ✅ | InlineConstraints に verbatim 保持・テストあり |
+| `STORAGE { PLAIN \| EXTERNAL \| EXTENDED \| MAIN }` | ✅ | InlineConstraints に verbatim 保持・テストあり |
 
 ### テーブルレベル制約
 
@@ -241,28 +241,28 @@ PostgreSQL 16 `CREATE TABLE` の構文要素ごとの対応状況。
 | `UNIQUE (cols)`（無名） | ✅ | |
 | `FOREIGN KEY (cols) REFERENCES ...`（無名） | ✅ | |
 | `CHECK (expr)`（無名） | ✅ | |
-| `UNIQUE NULLS [ NOT ] DISTINCT` | ❌ | |
-| `CHECK (expr) NO INHERIT` | ❌ | |
-| `EXCLUDE [USING method] (...)` | ❌ | |
-| FK: `MATCH FULL \| PARTIAL \| SIMPLE` | 🔶 | verbatim 保持のみ |
-| FK: `ON DELETE action` | 🔶 | verbatim 保持のみ |
-| FK: `ON UPDATE action` | 🔶 | verbatim 保持のみ |
-| 制約: `DEFERRABLE \| NOT DEFERRABLE` | 🔶 | verbatim 保持のみ |
-| 制約: `INITIALLY IMMEDIATE \| DEFERRED` | 🔶 | verbatim 保持のみ |
+| `UNIQUE NULLS [ NOT ] DISTINCT` | ✅ | TableConstraint.Definition に verbatim 保持・テストあり |
+| `CHECK (expr) NO INHERIT` | ✅ | InlineConstraints に verbatim 保持・テストあり |
+| `EXCLUDE [USING method] (...)` | ✅ | TableConstraint.Definition に verbatim 保持・テストあり |
+| FK: `MATCH FULL \| PARTIAL \| SIMPLE` | ✅ | verbatim 保持・テストあり |
+| FK: `ON DELETE action` | ✅ | verbatim 保持・テストあり |
+| FK: `ON UPDATE action` | ✅ | verbatim 保持・テストあり |
+| 制約: `DEFERRABLE \| NOT DEFERRABLE` | ✅ | verbatim 保持・テストあり |
+| 制約: `INITIALLY IMMEDIATE \| DEFERRED` | ✅ | verbatim 保持・テストあり |
 
 ### テーブル構造オプション
 
 | 構文 | 状況 | 備考 |
 |------|------|------|
-| `INHERITS (parent_table)` | ❌ | |
-| `LIKE source_table [INCLUDING/EXCLUDING ...]` | ❌ | |
-| `PARTITION BY { RANGE \| LIST \| HASH }` | ❌ | |
-| `PARTITION OF parent_table` | ❌ | |
-| `WITH (storage_parameter)` | ❌ | |
-| `WITHOUT OIDS` | ❌ | |
-| `ON COMMIT { PRESERVE ROWS \| DELETE ROWS \| DROP }` | ❌ | |
-| `TABLESPACE tablespace_name` | ❌ | |
-| `USING method` | ❌ | |
+| `INHERITS (parent_table)` | ✅ | 閉じ括弧後の節は無視（スキーマ追跡には影響なし）・テストあり |
+| `LIKE source_table [INCLUDING/EXCLUDING ...]` | ✅ | TableConstraint.Definition に verbatim 保持・テストあり |
+| `PARTITION BY { RANGE \| LIST \| HASH }` | ✅ | 閉じ括弧後の節は無視・テストあり |
+| `PARTITION OF parent_table` | ❌ | `PARTITION OF` を含む CREATE TABLE 形式は未対応（switch にマッチしない） |
+| `WITH (storage_parameter)` | ✅ | 閉じ括弧後の節は無視・テストあり |
+| `WITHOUT OIDS` | ✅ | 同上（PostgreSQL 12 以降実質的に no-op） |
+| `ON COMMIT { PRESERVE ROWS \| DELETE ROWS \| DROP }` | ✅ | 閉じ括弧後の節は無視・TEMPORARY TABLE と組み合わせ使用 |
+| `TABLESPACE tablespace_name` | ✅ | 閉じ括弧後の節は無視・テストあり |
+| `USING method` | ✅ | 同上 |
 
 ---
 

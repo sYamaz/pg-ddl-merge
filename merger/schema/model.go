@@ -35,6 +35,8 @@ type Schema struct {
 
 type Table struct {
 	Name        string
+	Temporary   bool
+	Unlogged    bool
 	Columns     []parser.ColumnDef
 	Constraints []parser.TableConstraint
 }

@@ -52,6 +52,7 @@ type TableConstraint struct {
 type ColumnDef struct {
 	Name              string
 	DataType          string
+	Collation         string // e.g. `"ja-x-icu"` or `pg_catalog.default`
 	NotNull           bool
 	Default           *string
 	InlineConstraints []string
@@ -59,6 +60,8 @@ type ColumnDef struct {
 
 type CreateTableStmt struct {
 	TableName   string
+	Temporary   bool
+	Unlogged    bool
 	Columns     []ColumnDef
 	Constraints []TableConstraint
 }

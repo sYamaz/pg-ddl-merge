@@ -53,7 +53,13 @@ func Emit(s *schema.Schema) string {
 
 func emitTable(t *schema.Table) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", t.Name))
+	keyword := "TABLE"
+	if t.Temporary {
+		keyword = "TEMPORARY TABLE"
+	} else if t.Unlogged {
+		keyword = "UNLOGGED TABLE"
+	}
+	sb.WriteString(fmt.Sprintf("CREATE %s %s (\n", keyword, t.Name))
 
 	totalItems := len(t.Columns) + len(t.Constraints)
 	i := 0
@@ -88,6 +94,9 @@ func emitTable(t *schema.Table) string {
 
 func emitColumn(col parser.ColumnDef) string {
 	parts := []string{col.Name, col.DataType}
+	if col.Collation != "" {
+		parts = append(parts, "COLLATE "+col.Collation)
+	}
 	if col.NotNull {
 		parts = append(parts, "NOT NULL")
 	}
