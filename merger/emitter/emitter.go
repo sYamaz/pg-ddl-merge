@@ -43,12 +43,9 @@ func Emit(s *schema.Schema) string {
 			unique, idx.Name, idx.TableName, idx.Body))
 	}
 
-	if len(s.Unknowns) > 0 {
-		sb.WriteString("-- NOTE: the following statements were not recognized and are passed through verbatim\n")
-		for _, u := range s.Unknowns {
-			sb.WriteString(u)
-			sb.WriteString(";\n\n")
-		}
+	for _, u := range s.Unknowns {
+		sb.WriteString(u)
+		sb.WriteString(";\n\n")
 	}
 
 	return strings.TrimRight(sb.String(), "\n") + "\n"

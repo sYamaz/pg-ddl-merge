@@ -179,9 +179,6 @@ func TestEmit_Unknown(t *testing.T) {
 	if !strings.Contains(got, "SET search_path = public;") {
 		t.Errorf("missing unknown stmt: %s", got)
 	}
-	if !strings.Contains(got, "-- NOTE:") {
-		t.Errorf("missing NOTE comment: %s", got)
-	}
 }
 
 // ---- Output ends with newline -----------------------------------------------

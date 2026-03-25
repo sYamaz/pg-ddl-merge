@@ -1,0 +1,2 @@
+ALTER TABLE customers ADD CONSTRAINT pk_customers PRIMARY KEY (id);
+ALTER TABLE orders ALTER COLUMN total SET DEFAULT 0.00;
