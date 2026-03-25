@@ -7,8 +7,10 @@ PostgreSQL の DDL マイグレーションファイル群（`01_xxx.sql`, `02_x
 
 ```bash
 go build ./...          # ビルド
-go test ./merger/...    # テスト実行
-go run . -input ./ddl -output ./merged.sql   # 実行
+go test ./...           # 全テスト実行
+go test ./... -count=1 -coverprofile=coverage.out  # カバレッジ付き
+go test ./merger -run TestRun_Golden -update        # ゴールデンファイル更新
+go run . -input ./ddl -output ./merged.sql          # 実行
 ```
 
 ## フラグ
@@ -34,6 +36,10 @@ merger/
     schema.go               # Apply() — DDL をスキーマモデルに適用
   emitter/
     emitter.go              # Schema → クリーンな SQL 文字列
+docs/
+  postgres-command-coverage.md  # 対応コマンドの網羅状況ドキュメント
+testdata/
+  integration/                  # ゴールデンテスト用入出力ディレクトリ（各シナリオごとにサブディレクトリ）
 ```
 
 ## 入力ファイルの命名規則
