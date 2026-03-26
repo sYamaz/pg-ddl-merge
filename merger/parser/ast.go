@@ -74,6 +74,7 @@ type CreateTableStmt struct {
 	Unlogged    bool
 	Columns     []ColumnDef
 	Constraints []TableConstraint
+	PartitionBy string // e.g. "RANGE (id)" — empty for non-partitioned tables
 }
 
 type AlterTableStmt struct {

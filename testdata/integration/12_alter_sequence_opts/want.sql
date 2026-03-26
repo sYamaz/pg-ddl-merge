@@ -9,7 +9,7 @@ CREATE TABLE orders (
 CREATE TABLE order_items (
     id integer NOT NULL,
     order_id bigint
-);
+) PARTITION BY RANGE (id);
 
 CREATE TABLE order_items_2024
     PARTITION OF order_items

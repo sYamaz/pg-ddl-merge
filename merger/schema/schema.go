@@ -75,6 +75,7 @@ func (s *Schema) applyCreateTable(v parser.CreateTableStmt) error {
 		Unlogged:    v.Unlogged,
 		Columns:     v.Columns,
 		Constraints: v.Constraints,
+		PartitionBy: v.PartitionBy,
 	}
 	s.tableIndex[key] = len(s.Tables)
 	s.Tables = append(s.Tables, t)
