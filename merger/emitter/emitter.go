@@ -190,7 +190,11 @@ func emitTable(t *schema.Table) string {
 		sb.WriteString("    " + line + comma + "\n")
 	}
 
-	sb.WriteString(");\n")
+	if t.PartitionBy != "" {
+		sb.WriteString(") PARTITION BY " + t.PartitionBy + ";\n")
+	} else {
+		sb.WriteString(");\n")
+	}
 	return sb.String()
 }
 

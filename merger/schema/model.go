@@ -52,6 +52,7 @@ type Table struct {
 	Unlogged    bool
 	Columns     []parser.ColumnDef
 	Constraints []parser.TableConstraint
+	PartitionBy string // e.g. "RANGE (id)" — empty for non-partitioned tables
 }
 
 func New() *Schema {

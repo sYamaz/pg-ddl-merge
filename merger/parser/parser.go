@@ -173,13 +173,56 @@ func parseCreateTable(sql string) (Statement, error) {
 		return nil, fmt.Errorf("CREATE TABLE %s: %w", tableName, err)
 	}
 
+	// Extract optional PARTITION BY clause that follows the column list.
+	var partitionBy string
+	if closeIdx := parenClose(sql, start); closeIdx >= 0 {
+		rest := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql[closeIdx+1:]), ";"))
+		if idx := strings.Index(strings.ToUpper(rest), "PARTITION BY"); idx >= 0 {
+			partitionBy = strings.TrimSpace(rest[idx+len("PARTITION BY"):])
+		}
+	}
+
 	return CreateTableStmt{
 		TableName:   tableName,
 		Temporary:   temporary,
 		Unlogged:    unlogged,
 		Columns:     cols,
 		Constraints: constraints,
+		PartitionBy: partitionBy,
 	}, nil
+}
+
+// parenClose returns the index of the ')' that closes the '(' at start,
+// accounting for nested parens and single-quoted strings.
+func parenClose(sql string, start int) int {
+	if start >= len(sql) || sql[start] != '(' {
+		return -1
+	}
+	depth := 0
+	for i := start; i < len(sql); i++ {
+		switch sql[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		case '\'':
+			i++
+			for i < len(sql) {
+				if sql[i] == '\'' {
+					if i+1 < len(sql) && sql[i+1] == '\'' {
+						i++
+					} else {
+						break
+					}
+				}
+				i++
+			}
+		}
+	}
+	return -1
 }
 
 // extractParenBody returns the content between the first '(' and its matching ')'.
