@@ -52,42 +52,57 @@ testdata/
 
 - `CREATE TABLE` / `DROP TABLE`
 - `CREATE TABLE ... PARTITION OF`
+- `CREATE TEMPORARY TABLE` / `CREATE UNLOGGED TABLE`
 - `ALTER TABLE`: `ADD COLUMN`, `DROP COLUMN`, `ALTER COLUMN TYPE`, `SET/DROP DEFAULT`, `SET/DROP NOT NULL`, `RENAME COLUMN`, `RENAME TO`, `ADD/DROP CONSTRAINT`
-- `CREATE [UNIQUE] INDEX` / `DROP INDEX`
+- `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS]` / `DROP INDEX`
+  - 同名インデックスの再定義は後勝ち（`IF NOT EXISTS` の場合はスキップ）
 - `CREATE SEQUENCE` / `DROP SEQUENCE`
 - `ALTER SEQUENCE`（オプション変更）
 - `CREATE TYPE ... AS ENUM` / `AS (composite)` / `AS RANGE`
 - `DROP TYPE` / `ALTER TYPE`（`ADD VALUE`, `RENAME VALUE`, `RENAME TO`）
 - `TRUNCATE TABLE`
+- `CREATE [OR REPLACE] VIEW` / `DROP VIEW`
+- `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW`
+- `CREATE [OR REPLACE] FUNCTION` / `DROP FUNCTION`
+- `CREATE [OR REPLACE] PROCEDURE` / `DROP PROCEDURE`
+- `CREATE [CONSTRAINT] [OR REPLACE] TRIGGER` / `DROP TRIGGER`
+- `CREATE DOMAIN` / `DROP DOMAIN`
+- `CREATE EXTENSION [IF NOT EXISTS]` / `DROP EXTENSION`
+- `CREATE SCHEMA` / `DROP SCHEMA`
+- `CREATE POLICY` / `DROP POLICY`
+- `CREATE [OR REPLACE] RULE` / `DROP RULE`
+- `ALTER INDEX/VIEW/FUNCTION/…`: `RENAME TO` に対応。それ以外は UnknownStmt でパススルー
 - 未認識ステートメント → 末尾に verbatim pass-through
+
+## 出力順序
+
+Emitter は以下の順で出力する（依存関係の都合で変更不可）：
+`SCHEMA` → `EXTENSION` → `SEQUENCE` → `TYPE(ENUM/composite/range)` → `DOMAIN` → `TABLE` → `INDEX` → `FUNCTION/PROCEDURE` → `VIEW/MATERIALIZED VIEW` → `TRIGGER` → `POLICY/RULE` → `TRUNCATE` → `UNKNOWN(pass-through)`
 
 ## テスト方針
 
-このプロジェクトにはテストの役割が異なる 3 層がある。
+3 層構成。統合テストが最重要。
 
-### 1. ユニットテスト（`merger/parser`, `merger/schema`, `merger/emitter`）
-パーサー・スキーマモデル・エミッターの設計通りの挙動をテストする。
-モックや in-memory 構造体で完結するため、高速に実行できる。
+| 層 | コマンド | 目的 |
+|----|---------|------|
+| ユニット | `go test ./merger/...` | パーサー・スキーマ・エミッターの設計通りの挙動 |
+| ゴールデン | `go test ./merger -run TestRun_Golden` | マージ出力の文字列フォーマット回帰 |
+| **PostgreSQL 統合** | `go test -tags integration ./integration` | **最重要**：実 DB で sequential 適用と merged 適用が同一スキーマになることを `pg_dump` で比較 |
 
-### 2. ゴールデンテスト（`go test ./merger -run TestRun_Golden`）
-`testdata/integration/*/input/` の SQL を実際に処理し、`want.sql` と一致するかを検証する。
-出力フォーマットの回帰テストとして機能する。
+新機能・バグ修正時は統合テストシナリオを追加すること。統合テストを通過しない変更はマージしない。
 
-### 3. PostgreSQL 統合テスト（`go test -tags integration ./integration`）
-**このツールの品質を最終的に保証するテスト**。
-実際の PostgreSQL 16 コンテナを使い、以下を検証する：
-1. 入力 SQL ファイルを順次適用したスキーマ（sequential DB）
-2. merger が生成したマージ済み SQL を適用したスキーマ（merged DB）
-の 2 つを `pg_dump` で比較し、**意味的に等価**であることを確認する。
+### 統合テストシナリオの追加方法
 
-**統合テストが最重要**：merger の出力が PostgreSQL に正しく適用できること、
-かつ sequential 適用と同一スキーマになることを実際の DB で保証するため。
-新機能追加・バグ修正時は必ず対応する統合テストシナリオを `testdata/integration/` に追加すること。
-統合テストを通過しない変更はマージしない。
+```
+testdata/integration/NN_scenario_name/
+  input/           # 01_xxx.sql, 02_xxx.sql ... （順次適用される）
+  want.sql         # ゴールデンテスト用の期待出力
+  setup.sql        # （省略可）sequential/merged 両 DB に事前適用する SQL
+```
 
 ## 注意事項
 
-- 外部依存なし（stdlib のみ）
+- `merger` パッケージ本体は外部依存なし（stdlib のみ）。`integration` パッケージは testcontainers・lib/pq を使用
 - FK 依存のトポロジカルソートは未対応。テーブルは最初の `CREATE TABLE` 登場順で出力される
 - `RENAME COLUMN` 後、テーブル制約定義の文字列は自動更新されない（stderr に警告を出力）
 - ドル引用符（`$$...$$`）内の `;` はステートメント区切りとして扱われない
