@@ -1,0 +1,1 @@
+CREATE FUNCTION double_val(x INT) RETURNS INT LANGUAGE sql AS $$ SELECT x * 2 $$;

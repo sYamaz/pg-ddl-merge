@@ -1,0 +1,1 @@
+CREATE DOMAIN positive_int AS INTEGER CHECK (VALUE > 0);
