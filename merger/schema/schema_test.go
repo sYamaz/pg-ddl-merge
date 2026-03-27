@@ -314,14 +314,40 @@ func TestApplyCreateIndex(t *testing.T) {
 	}
 }
 
-func TestApplyCreateIndex_Duplicate(t *testing.T) {
+func TestApplyCreateIndex_Duplicate_LastWins(t *testing.T) {
 	s := newSchema()
 	applyAll(t, s,
 		parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
 		parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id)"},
+		parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id) WHERE (active)", Unique: true},
 	)
-	if err := s.Apply(parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id)"}); err == nil {
-		t.Error("expected error")
+	if len(s.Indexes) != 1 {
+		t.Fatalf("expected 1 index after duplicate, got %d", len(s.Indexes))
+	}
+	if !s.Indexes[0].Unique {
+		t.Error("expected last definition (Unique=true) to win")
+	}
+	if s.Indexes[0].Body != "(id) WHERE (active)" {
+		t.Errorf("Body: %q", s.Indexes[0].Body)
+	}
+}
+
+func TestApplyCreateIndex_IfNotExists_SkipDuplicate(t *testing.T) {
+	s := newSchema()
+	applyAll(t, s,
+		parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}},
+		parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id)"},
+		// IF NOT EXISTS on existing index must be skipped — not overwritten
+		parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Body: "(id) WHERE (active)", Unique: true, IfNotExists: true},
+	)
+	if len(s.Indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(s.Indexes))
+	}
+	if s.Indexes[0].Unique {
+		t.Error("IF NOT EXISTS should not overwrite; original (Unique=false) must be kept")
+	}
+	if s.Indexes[0].Body != "(id)" {
+		t.Errorf("Body: %q, want %q", s.Indexes[0].Body, "(id)")
 	}
 }
 

@@ -270,16 +270,24 @@ func (s *Schema) dropOneTable(name string, ifExists bool) error {
 
 func (s *Schema) applyCreateIndex(v parser.CreateIndexStmt) error {
 	key := normIdent(v.IndexName)
-	if _, exists := s.indexIndex[key]; exists {
-		return fmt.Errorf("duplicate CREATE INDEX: %s", v.IndexName)
+	newIdx := Index{
+		Name:         v.IndexName,
+		TableName:    v.TableName,
+		Unique:       v.Unique,
+		Concurrently: v.Concurrently,
+		IfNotExists:  v.IfNotExists,
+		Body:         v.Body,
+	}
+	if pos, exists := s.indexIndex[key]; exists {
+		if v.IfNotExists {
+			return nil // IF NOT EXISTS: skip silently, matching PostgreSQL semantics
+		}
+		fmt.Fprintf(os.Stderr, "warning: duplicate CREATE INDEX %q — overwriting with new definition\n", v.IndexName)
+		s.Indexes[pos] = newIdx
+		return nil
 	}
 	s.indexIndex[key] = len(s.Indexes)
-	s.Indexes = append(s.Indexes, Index{
-		Name:      v.IndexName,
-		TableName: v.TableName,
-		Unique:    v.Unique,
-		Body:      v.Body,
-	})
+	s.Indexes = append(s.Indexes, newIdx)
 	return nil
 }
 

@@ -10,6 +10,7 @@ go build ./...          # ビルド
 go test ./...           # 全テスト実行
 go test ./... -count=1 -coverprofile=coverage.out  # カバレッジ付き
 go test ./merger -run TestRun_Golden -update        # ゴールデンファイル更新
+go test -tags integration ./integration             # PostgreSQL 統合テスト（要 Docker）
 go run . -input ./ddl -output ./merged.sql          # 実行
 ```
 
@@ -59,6 +60,30 @@ testdata/
 - `DROP TYPE` / `ALTER TYPE`（`ADD VALUE`, `RENAME VALUE`, `RENAME TO`）
 - `TRUNCATE TABLE`
 - 未認識ステートメント → 末尾に verbatim pass-through
+
+## テスト方針
+
+このプロジェクトにはテストの役割が異なる 3 層がある。
+
+### 1. ユニットテスト（`merger/parser`, `merger/schema`, `merger/emitter`）
+パーサー・スキーマモデル・エミッターの設計通りの挙動をテストする。
+モックや in-memory 構造体で完結するため、高速に実行できる。
+
+### 2. ゴールデンテスト（`go test ./merger -run TestRun_Golden`）
+`testdata/integration/*/input/` の SQL を実際に処理し、`want.sql` と一致するかを検証する。
+出力フォーマットの回帰テストとして機能する。
+
+### 3. PostgreSQL 統合テスト（`go test -tags integration ./integration`）
+**このツールの品質を最終的に保証するテスト**。
+実際の PostgreSQL 16 コンテナを使い、以下を検証する：
+1. 入力 SQL ファイルを順次適用したスキーマ（sequential DB）
+2. merger が生成したマージ済み SQL を適用したスキーマ（merged DB）
+の 2 つを `pg_dump` で比較し、**意味的に等価**であることを確認する。
+
+**統合テストが最重要**：merger の出力が PostgreSQL に正しく適用できること、
+かつ sequential 適用と同一スキーマになることを実際の DB で保証するため。
+新機能追加・バグ修正時は必ず対応する統合テストシナリオを `testdata/integration/` に追加すること。
+統合テストを通過しない変更はマージしない。
 
 ## 注意事項
 

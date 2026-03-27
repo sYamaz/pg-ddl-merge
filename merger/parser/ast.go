@@ -88,10 +88,12 @@ type DropTableStmt struct {
 }
 
 type CreateIndexStmt struct {
-	IndexName string
-	TableName string
-	Unique    bool
-	Body      string // everything after "ON tablename"
+	IndexName    string
+	TableName    string
+	Unique       bool
+	Concurrently bool
+	IfNotExists  bool
+	Body         string // everything after "ON tablename"
 }
 
 type DropIndexStmt struct {

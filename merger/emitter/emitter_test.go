@@ -195,6 +195,43 @@ func TestEmit_UniqueIndex(t *testing.T) {
 	}
 }
 
+func TestEmit_ConcurrentlyIndex(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}})
+	mustApply(t, s, parser.CreateIndexStmt{IndexName: "idx", TableName: "t", Concurrently: true, Body: "(id)"})
+
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE INDEX CONCURRENTLY idx ON t (id);") {
+		t.Errorf("expected CONCURRENTLY in output: %s", got)
+	}
+}
+
+func TestEmit_IfNotExistsIndex(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}})
+	mustApply(t, s, parser.CreateIndexStmt{IndexName: "idx", TableName: "t", IfNotExists: true, Body: "(id)"})
+
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE INDEX IF NOT EXISTS idx ON t (id);") {
+		t.Errorf("expected IF NOT EXISTS in output: %s", got)
+	}
+}
+
+func TestEmit_UniqueIndexConcurrently(t *testing.T) {
+	s := newSchema()
+	mustApply(t, s, parser.CreateTableStmt{TableName: "t", Columns: []parser.ColumnDef{{Name: "id", DataType: "int"}}})
+	mustApply(t, s, parser.CreateIndexStmt{
+		IndexName: "idx", TableName: "t",
+		Unique: true, Concurrently: true, IfNotExists: true,
+		Body: "(id)",
+	})
+
+	got := Emit(s)
+	if !strings.Contains(got, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx ON t (id);") {
+		t.Errorf("expected full flags in output: %s", got)
+	}
+}
+
 // ---- Unknowns ---------------------------------------------------------------
 
 func TestEmit_Unknown(t *testing.T) {

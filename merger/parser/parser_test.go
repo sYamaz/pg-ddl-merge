@@ -512,6 +512,37 @@ func TestParseCreateIndex_Concurrently(t *testing.T) {
 	if ci.IndexName != "idx_name" {
 		t.Errorf("IndexName: %q", ci.IndexName)
 	}
+	if !ci.Concurrently {
+		t.Error("expected Concurrently=true")
+	}
+}
+
+func TestParseCreateIndex_IfNotExists(t *testing.T) {
+	stmt := mustParse(t, "CREATE INDEX IF NOT EXISTS idx_name ON t (name)")
+	ci := stmt.(CreateIndexStmt)
+	if ci.IndexName != "idx_name" {
+		t.Errorf("IndexName: %q", ci.IndexName)
+	}
+	if !ci.IfNotExists {
+		t.Error("expected IfNotExists=true")
+	}
+}
+
+func TestParseCreateIndex_ConcurrentlyIfNotExists(t *testing.T) {
+	stmt := mustParse(t, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_name ON t (name)")
+	ci := stmt.(CreateIndexStmt)
+	if !ci.Unique {
+		t.Error("expected Unique=true")
+	}
+	if !ci.Concurrently {
+		t.Error("expected Concurrently=true")
+	}
+	if !ci.IfNotExists {
+		t.Error("expected IfNotExists=true")
+	}
+	if ci.IndexName != "idx_name" {
+		t.Errorf("IndexName: %q", ci.IndexName)
+	}
 }
 
 // ---- DROP INDEX -------------------------------------------------------------

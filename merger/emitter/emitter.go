@@ -95,8 +95,16 @@ func Emit(s *schema.Schema) string {
 		if idx.Unique {
 			unique = "UNIQUE "
 		}
-		sb.WriteString(fmt.Sprintf("CREATE %sINDEX %s ON %s %s;\n\n",
-			unique, idx.Name, idx.TableName, idx.Body))
+		concurrently := ""
+		if idx.Concurrently {
+			concurrently = "CONCURRENTLY "
+		}
+		ifNotExists := ""
+		if idx.IfNotExists {
+			ifNotExists = "IF NOT EXISTS "
+		}
+		sb.WriteString(fmt.Sprintf("CREATE %sINDEX %s%s%s ON %s %s;\n\n",
+			unique, concurrently, ifNotExists, idx.Name, idx.TableName, idx.Body))
 	}
 
 	// 8. FUNCTION + PROCEDURE

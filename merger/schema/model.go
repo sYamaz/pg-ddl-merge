@@ -13,10 +13,12 @@ type EnumType struct {
 }
 
 type Index struct {
-	Name      string
-	TableName string
-	Unique    bool
-	Body      string
+	Name         string
+	TableName    string
+	Unique       bool
+	Concurrently bool
+	IfNotExists  bool
+	Body         string
 }
 
 // GenericObject holds a verbatim SQL definition for tracked objects

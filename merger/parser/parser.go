@@ -13,7 +13,7 @@ var (
 	reCollate        = regexp.MustCompile(`(?i)\s+COLLATE\s+("(?:[^"]|"")*"|\S+)`)
 	reAlterTable     = regexp.MustCompile(`(?i)^ALTER\s+TABLE\s+(?:ONLY\s+)?(\S+)\s+(.+)`)
 	reDropTable      = regexp.MustCompile(`(?i)^DROP\s+TABLE\s+(?:(IF\s+EXISTS)\s+)?(.+)`)
-	reCreateIndex    = regexp.MustCompile(`(?i)^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)\s*(.*)`)
+	reCreateIndex    = regexp.MustCompile(`(?i)^CREATE\s+(UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(IF\s+NOT\s+EXISTS\s+)?(\S+)\s+ON\s+(\S+)\s*(.*)`)
 	reDropIndex      = regexp.MustCompile(`(?i)^DROP\s+INDEX\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
 	reAlterIndex     = regexp.MustCompile(`(?i)^ALTER\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\S+)\s+RENAME\s+TO\s+(\S+)`)
 	reCreateSequence = regexp.MustCompile(`(?is)^CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)(.*)`)
@@ -639,11 +639,14 @@ func parseCreateIndex(sql string) (Statement, error) {
 	if m == nil {
 		return nil, fmt.Errorf("cannot parse CREATE INDEX: %s", sql[:min(len(sql), 60)])
 	}
+	// m[1]=UNIQUE, m[2]=CONCURRENTLY, m[3]=IF NOT EXISTS, m[4]=name, m[5]=table, m[6]=body
 	return CreateIndexStmt{
-		Unique:    strings.TrimSpace(m[1]) != "",
-		IndexName: m[2],
-		TableName: m[3],
-		Body:      strings.TrimSpace(m[4]),
+		Unique:       strings.TrimSpace(m[1]) != "",
+		Concurrently: strings.TrimSpace(m[2]) != "",
+		IfNotExists:  strings.TrimSpace(m[3]) != "",
+		IndexName:    m[4],
+		TableName:    m[5],
+		Body:         strings.TrimSuffix(strings.TrimSpace(m[6]), ";"),
 	}, nil
 }
 
