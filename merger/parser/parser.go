@@ -472,11 +472,13 @@ var (
 	reAlterColType       = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+(?:SET\s+DATA\s+)?TYPE\s+(.+)`)
 	reAlterColSet        = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+(SET\s+DEFAULT\s+(.+)|DROP\s+DEFAULT|SET\s+NOT\s+NULL|DROP\s+NOT\s+NULL)`)
 	reAlterColAddGen     = regexp.MustCompile(`(?is)^ALTER\s+COLUMN\s+(\S+)\s+ADD\s+(GENERATED\s+.+)`)
+	reAlterColSetGen     = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+SET\s+GENERATED\s+(ALWAYS|BY\s+DEFAULT)`)
 	reAlterColDropIdent  = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+DROP\s+IDENTITY(?:\s+(IF\s+EXISTS))?`)
 	reAlterColSetStorage = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+SET\s+STORAGE\s+(\S+)`)
 	reAlterColSetComp    = regexp.MustCompile(`(?i)^ALTER\s+COLUMN\s+(\S+)\s+SET\s+COMPRESSION\s+(\S+)`)
 	reRenameCol          = regexp.MustCompile(`(?i)^RENAME\s+COLUMN\s+(\S+)\s+TO\s+(\S+)`)
 	reRenameTo           = regexp.MustCompile(`(?i)^RENAME\s+TO\s+(\S+)`)
+	reRenameConstr       = regexp.MustCompile(`(?i)^RENAME\s+CONSTRAINT\s+(\S+)\s+TO\s+(\S+)`)
 	reAddConstr          = regexp.MustCompile(`(?i)^ADD\s+CONSTRAINT\s+(\S+)\s+(.+)`)
 	reAddConstrAnon      = regexp.MustCompile(`(?i)^ADD\s+(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK)\s*(.*)`)
 	reDropConstr         = regexp.MustCompile(`(?i)^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\S+)`)
@@ -541,6 +543,10 @@ func parseAlterAction(tableName, s string) (AlterAction, error) {
 		clause := strings.TrimSuffix(strings.TrimSpace(m[2]), ";")
 		return AlterAction{Kind: ActionAddGenerated, Column: m[1], GeneratedClause: clause}, nil
 	}
+	if m := reAlterColSetGen.FindStringSubmatch(s); m != nil {
+		kind := strings.TrimSuffix(strings.ToUpper(strings.TrimSpace(m[2])), ";")
+		return AlterAction{Kind: ActionSetGenerated, Column: m[1], GeneratedKind: kind}, nil
+	}
 	if m := reAlterColDropIdent.FindStringSubmatch(s); m != nil {
 		return AlterAction{Kind: ActionDropIdentity, Column: m[1], IfExists: m[2] != ""}, nil
 	}
@@ -549,6 +555,11 @@ func parseAlterAction(tableName, s string) (AlterAction, error) {
 	}
 	if m := reAlterColSetComp.FindStringSubmatch(s); m != nil {
 		return AlterAction{Kind: ActionSetCompression, Column: m[1], CompressionMethod: strings.TrimSuffix(m[2], ";")}, nil
+	}
+	if m := reRenameConstr.FindStringSubmatch(s); m != nil {
+		oldName := strings.TrimSuffix(m[1], ";")
+		newName := strings.TrimSuffix(m[2], ";")
+		return AlterAction{Kind: ActionRenameConstraint, Constraint: TableConstraint{Name: oldName}, NewName: newName}, nil
 	}
 	if m := reRenameCol.FindStringSubmatch(s); m != nil {
 		return AlterAction{Kind: ActionRenameColumn, Column: m[1], NewName: m[2]}, nil
@@ -582,7 +593,6 @@ func isSkippableAlterAction(upper string) bool {
 	skippablePrefixes := []string{
 		"SET STATISTICS",
 		"SET (", "RESET (",
-		"SET GENERATED",
 		"SET SCHEMA",
 		"SET TABLESPACE",
 		"SET WITHOUT CLUSTER",

@@ -293,8 +293,9 @@ PostgreSQL 16 `CREATE TABLE` の構文要素ごとの対応状況。
 | `ALTER COLUMN col SET COMPRESSION method` | ✅ | カラムの InlineConstraints を更新（COMPRESSION キーワードを置換または追加） |
 | `ALTER COLUMN col SET (option)` / `RESET (option)` | ✅ | 警告を出してスキップ（スキーマモデルに影響なし） |
 | `ALTER COLUMN col ADD GENERATED { ALWAYS \| BY DEFAULT } AS IDENTITY [(...)]` | ✅ | カラムの InlineConstraints に GENERATED 句を追加または置換 |
-| `ALTER COLUMN col SET GENERATED ...` | ✅ | 警告を出してスキップ（スキーマモデルに影響なし） |
+| `ALTER COLUMN col SET GENERATED { ALWAYS \| BY DEFAULT }` | ✅ | InlineConstraints の GENERATED 句内の ALWAYS/BY DEFAULT を更新 |
 | `ALTER COLUMN col DROP IDENTITY [IF EXISTS]` | ✅ | カラムの InlineConstraints から GENERATED 句を除去 |
+| `RENAME CONSTRAINT old TO new` | ✅ | テーブルの制約名を変更 |
 | `ALTER COLUMN TYPE ... USING expr`（型変換） | ✅ | USING 節は除去して型名のみ保持 |
 | `SET SCHEMA new_schema` | ✅ | 警告を出してスキップ |
 | `SET TABLESPACE new_tablespace` | ✅ | 同上 |

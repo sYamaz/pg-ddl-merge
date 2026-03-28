@@ -256,6 +256,26 @@ func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string)
 		}
 		t.Columns[idx].InlineConstraints = replaceOrAppendInlineConstraint(
 			t.Columns[idx].InlineConstraints, "COMPRESSION", "COMPRESSION "+action.CompressionMethod)
+
+	case parser.ActionRenameConstraint:
+		cKey := normIdent(action.Constraint.Name)
+		idx := findConstraintIdx(t, cKey)
+		if idx < 0 {
+			return fmt.Errorf("RENAME CONSTRAINT: constraint not found: %s", action.Constraint.Name)
+		}
+		t.Constraints[idx].Name = action.NewName
+
+	case parser.ActionSetGenerated:
+		colKey := normIdent(action.Column)
+		idx := findColumnIdx(t, colKey)
+		if idx < 0 {
+			return fmt.Errorf("SET GENERATED: column not found: %s", action.Column)
+		}
+		updated := setGeneratedKind(t.Columns[idx].InlineConstraints, action.GeneratedKind)
+		if updated == nil {
+			return fmt.Errorf("SET GENERATED: column %s has no identity", action.Column)
+		}
+		t.Columns[idx].InlineConstraints = updated
 	}
 	return nil
 }
@@ -704,4 +724,28 @@ func removeInlineConstraint(constraints []string, prefix string) []string {
 		}
 	}
 	return constraints
+}
+
+// setGeneratedKind replaces "ALWAYS" or "BY DEFAULT" in a GENERATED identity inline
+// constraint to match kind ("ALWAYS" or "BY DEFAULT"). Returns nil if no GENERATED
+// constraint is found.
+var reGeneratedAlwaysByDefault = regexp.MustCompile(`(?i)(GENERATED\s+)(ALWAYS|BY\s+DEFAULT)(\s+AS\s+IDENTITY.*)`)
+
+func setGeneratedKind(constraints []string, kind string) []string {
+	for i, c := range constraints {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(c)), "GENERATED") {
+			updated := reGeneratedAlwaysByDefault.ReplaceAllStringFunc(c, func(match string) string {
+				m := reGeneratedAlwaysByDefault.FindStringSubmatch(match)
+				if m == nil {
+					return match
+				}
+				return m[1] + kind + m[3]
+			})
+			result := make([]string, len(constraints))
+			copy(result, constraints)
+			result[i] = updated
+			return result
+		}
+	}
+	return nil
 }

@@ -41,25 +41,28 @@ const (
 	ActionRenameTo
 	ActionAddConstraint
 	ActionDropConstraint
-	ActionAddGenerated  // ALTER COLUMN col ADD GENERATED ... AS IDENTITY
-	ActionDropIdentity  // ALTER COLUMN col DROP IDENTITY [IF EXISTS]
-	ActionSetStorage    // ALTER COLUMN col SET STORAGE type
-	ActionSetCompression // ALTER COLUMN col SET COMPRESSION method
+	ActionAddGenerated     // ALTER COLUMN col ADD GENERATED ... AS IDENTITY
+	ActionDropIdentity     // ALTER COLUMN col DROP IDENTITY [IF EXISTS]
+	ActionSetStorage       // ALTER COLUMN col SET STORAGE type
+	ActionSetCompression   // ALTER COLUMN col SET COMPRESSION method
+	ActionRenameConstraint // RENAME CONSTRAINT old TO new
+	ActionSetGenerated     // ALTER COLUMN col SET GENERATED { ALWAYS | BY DEFAULT }
 	ActionSkip // unrecognized action — silently ignored
 )
 
 type AlterAction struct {
-	Kind             AlterActionKind
-	Column           string
-	NewName          string
-	DataType         string
-	Default          string
-	Constraint       TableConstraint
-	ColDef           *ColumnDef // populated for ActionAddColumn
-	GeneratedClause  string     // populated for ActionAddGenerated: e.g. "GENERATED ALWAYS AS IDENTITY"
-	StorageType      string     // populated for ActionSetStorage: e.g. "PLAIN"
-	CompressionMethod string    // populated for ActionSetCompression: e.g. "lz4"
-	IfExists         bool       // populated for ActionDropIdentity
+	Kind              AlterActionKind
+	Column            string
+	NewName           string
+	DataType          string
+	Default           string
+	Constraint        TableConstraint
+	ColDef            *ColumnDef // populated for ActionAddColumn
+	GeneratedClause   string     // populated for ActionAddGenerated: e.g. "GENERATED ALWAYS AS IDENTITY"
+	GeneratedKind     string     // populated for ActionSetGenerated: "ALWAYS" or "BY DEFAULT"
+	StorageType       string     // populated for ActionSetStorage: e.g. "PLAIN"
+	CompressionMethod string     // populated for ActionSetCompression: e.g. "lz4"
+	IfExists          bool       // populated for ActionDropIdentity
 }
 
 type TableConstraint struct {
