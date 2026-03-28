@@ -131,6 +131,12 @@ func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string)
 		if idx < 0 {
 			return fmt.Errorf("ALTER COLUMN TYPE: column not found: %s", action.Column)
 		}
+		for _, ic := range t.Columns[idx].InlineConstraints {
+			if strings.HasPrefix(strings.ToUpper(ic), "REFERENCES") {
+				fmt.Fprintf(os.Stderr, "warning: ALTER TABLE %s: changing type of column %s which has an inline REFERENCES constraint — verify that the referenced column type matches\n", t.Name, action.Column)
+				break
+			}
+		}
 		t.Columns[idx].DataType = action.DataType
 
 	case parser.ActionSetDefault:
@@ -210,10 +216,18 @@ func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string)
 	case parser.ActionDropConstraint:
 		cKey := normIdent(action.Constraint.Name)
 		idx := findConstraintIdx(t, cKey)
-		if idx < 0 {
-			return fmt.Errorf("DROP CONSTRAINT: constraint not found: %s", action.Constraint.Name)
+		if idx >= 0 {
+			t.Constraints = append(t.Constraints[:idx], t.Constraints[idx+1:]...)
+			return nil
 		}
-		t.Constraints = append(t.Constraints[:idx], t.Constraints[idx+1:]...)
+		// Not found in named constraints — try inline constraints by PostgreSQL auto-naming convention.
+		if dropInlineConstraintByAutoName(t, cKey) {
+			return nil
+		}
+		if action.IfExists {
+			return nil
+		}
+		return fmt.Errorf("DROP CONSTRAINT: constraint not found: %s", action.Constraint.Name)
 
 	case parser.ActionAddGenerated:
 		colKey := normIdent(action.Column)
@@ -748,4 +762,47 @@ func setGeneratedKind(constraints []string, kind string) []string {
 		}
 	}
 	return nil
+}
+
+// dropInlineConstraintByAutoName tries to remove an inline constraint whose
+// PostgreSQL auto-generated name matches cKey.
+//
+// PostgreSQL naming conventions:
+//   - {table}_pkey          → column-level PRIMARY KEY
+//   - {table}_{col}_key     → column-level UNIQUE
+//   - {table}_{col}_fkey    → column-level REFERENCES (foreign key)
+//   - {table}_{col}_check   → column-level CHECK
+//
+// Returns true if a matching inline constraint was found and removed.
+func dropInlineConstraintByAutoName(t *Table, cKey string) bool {
+	tKey := normIdent(t.Name)
+
+	// {table}_pkey → inline PRIMARY KEY (only one per table, column unknown)
+	if cKey == tKey+"_pkey" {
+		for i := range t.Columns {
+			before := len(t.Columns[i].InlineConstraints)
+			t.Columns[i].InlineConstraints = removeInlineConstraint(t.Columns[i].InlineConstraints, "PRIMARY KEY")
+			if len(t.Columns[i].InlineConstraints) < before {
+				return true
+			}
+		}
+	}
+
+	// Per-column patterns: {table}_{col}_{suffix}
+	for i, col := range t.Columns {
+		colKey := normIdent(col.Name)
+		switch cKey {
+		case tKey + "_" + colKey + "_key":
+			t.Columns[i].InlineConstraints = removeInlineConstraint(t.Columns[i].InlineConstraints, "UNIQUE")
+			return true
+		case tKey + "_" + colKey + "_fkey":
+			t.Columns[i].InlineConstraints = removeInlineConstraint(t.Columns[i].InlineConstraints, "REFERENCES")
+			return true
+		case tKey + "_" + colKey + "_check":
+			t.Columns[i].InlineConstraints = removeInlineConstraint(t.Columns[i].InlineConstraints, "CHECK")
+			return true
+		}
+	}
+
+	return false
 }

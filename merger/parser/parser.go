@@ -481,7 +481,7 @@ var (
 	reRenameConstr       = regexp.MustCompile(`(?i)^RENAME\s+CONSTRAINT\s+(\S+)\s+TO\s+(\S+)`)
 	reAddConstr          = regexp.MustCompile(`(?i)^ADD\s+CONSTRAINT\s+(\S+)\s+(.+)`)
 	reAddConstrAnon      = regexp.MustCompile(`(?i)^ADD\s+(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK)\s*(.*)`)
-	reDropConstr         = regexp.MustCompile(`(?i)^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\S+)`)
+	reDropConstr         = regexp.MustCompile(`(?i)^DROP\s+CONSTRAINT\s+(IF\s+EXISTS\s+)?(\S+)`)
 )
 
 func parseAlterTable(sql string) (Statement, error) {
@@ -575,7 +575,7 @@ func parseAlterAction(tableName, s string) (AlterAction, error) {
 		return AlterAction{Kind: ActionAddConstraint, Constraint: TableConstraint{Definition: strings.TrimSpace(def)}}, nil
 	}
 	if m := reDropConstr.FindStringSubmatch(s); m != nil {
-		return AlterAction{Kind: ActionDropConstraint, Constraint: TableConstraint{Name: m[1]}}, nil
+		return AlterAction{Kind: ActionDropConstraint, Constraint: TableConstraint{Name: m[2]}, IfExists: m[1] != ""}, nil
 	}
 
 	// Unrecognized action — warn and skip rather than error
