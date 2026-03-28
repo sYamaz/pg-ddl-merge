@@ -214,6 +214,48 @@ func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string)
 			return fmt.Errorf("DROP CONSTRAINT: constraint not found: %s", action.Constraint.Name)
 		}
 		t.Constraints = append(t.Constraints[:idx], t.Constraints[idx+1:]...)
+
+	case parser.ActionAddGenerated:
+		colKey := normIdent(action.Column)
+		idx := findColumnIdx(t, colKey)
+		if idx < 0 {
+			return fmt.Errorf("ADD GENERATED: column not found: %s", action.Column)
+		}
+		t.Columns[idx].InlineConstraints = replaceOrAppendInlineConstraint(
+			t.Columns[idx].InlineConstraints, "GENERATED", action.GeneratedClause)
+
+	case parser.ActionDropIdentity:
+		colKey := normIdent(action.Column)
+		idx := findColumnIdx(t, colKey)
+		if idx < 0 {
+			if action.IfExists {
+				return nil
+			}
+			return fmt.Errorf("DROP IDENTITY: column not found: %s", action.Column)
+		}
+		updated := removeInlineConstraint(t.Columns[idx].InlineConstraints, "GENERATED")
+		if len(updated) == len(t.Columns[idx].InlineConstraints) && !action.IfExists {
+			return fmt.Errorf("DROP IDENTITY: column %s has no identity", action.Column)
+		}
+		t.Columns[idx].InlineConstraints = updated
+
+	case parser.ActionSetStorage:
+		colKey := normIdent(action.Column)
+		idx := findColumnIdx(t, colKey)
+		if idx < 0 {
+			return fmt.Errorf("SET STORAGE: column not found: %s", action.Column)
+		}
+		t.Columns[idx].InlineConstraints = replaceOrAppendInlineConstraint(
+			t.Columns[idx].InlineConstraints, "STORAGE", "STORAGE "+action.StorageType)
+
+	case parser.ActionSetCompression:
+		colKey := normIdent(action.Column)
+		idx := findColumnIdx(t, colKey)
+		if idx < 0 {
+			return fmt.Errorf("SET COMPRESSION: column not found: %s", action.Column)
+		}
+		t.Columns[idx].InlineConstraints = replaceOrAppendInlineConstraint(
+			t.Columns[idx].InlineConstraints, "COMPRESSION", "COMPRESSION "+action.CompressionMethod)
 	}
 	return nil
 }
@@ -637,4 +679,29 @@ func findConstraintIdx(t *Table, normName string) int {
 		}
 	}
 	return -1
+}
+
+// replaceOrAppendInlineConstraint replaces the first inline constraint that starts
+// with prefix (case-insensitive) with newVal. If none exists, newVal is appended.
+func replaceOrAppendInlineConstraint(constraints []string, prefix, newVal string) []string {
+	upperPrefix := strings.ToUpper(prefix)
+	for i, c := range constraints {
+		if strings.HasPrefix(strings.ToUpper(c), upperPrefix) {
+			constraints[i] = newVal
+			return constraints
+		}
+	}
+	return append(constraints, newVal)
+}
+
+// removeInlineConstraint removes the first inline constraint that starts with prefix
+// (case-insensitive). Returns the slice unchanged if no match is found.
+func removeInlineConstraint(constraints []string, prefix string) []string {
+	upperPrefix := strings.ToUpper(prefix)
+	for i, c := range constraints {
+		if strings.HasPrefix(strings.ToUpper(c), upperPrefix) {
+			return append(constraints[:i], constraints[i+1:]...)
+		}
+	}
+	return constraints
 }

@@ -41,17 +41,25 @@ const (
 	ActionRenameTo
 	ActionAddConstraint
 	ActionDropConstraint
+	ActionAddGenerated  // ALTER COLUMN col ADD GENERATED ... AS IDENTITY
+	ActionDropIdentity  // ALTER COLUMN col DROP IDENTITY [IF EXISTS]
+	ActionSetStorage    // ALTER COLUMN col SET STORAGE type
+	ActionSetCompression // ALTER COLUMN col SET COMPRESSION method
 	ActionSkip // unrecognized action — silently ignored
 )
 
 type AlterAction struct {
-	Kind       AlterActionKind
-	Column     string
-	NewName    string
-	DataType   string
-	Default    string
-	Constraint TableConstraint
-	ColDef     *ColumnDef // populated for ActionAddColumn
+	Kind             AlterActionKind
+	Column           string
+	NewName          string
+	DataType         string
+	Default          string
+	Constraint       TableConstraint
+	ColDef           *ColumnDef // populated for ActionAddColumn
+	GeneratedClause  string     // populated for ActionAddGenerated: e.g. "GENERATED ALWAYS AS IDENTITY"
+	StorageType      string     // populated for ActionSetStorage: e.g. "PLAIN"
+	CompressionMethod string    // populated for ActionSetCompression: e.g. "lz4"
+	IfExists         bool       // populated for ActionDropIdentity
 }
 
 type TableConstraint struct {
