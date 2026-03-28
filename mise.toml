@@ -1,0 +1,17 @@
+[tools]
+go = "1.25.0"
+
+[tasks.build]
+run = "go build ./..."
+
+[tasks.test]
+run = "go test ./..."
+
+[tasks."test:cover"]
+run = "go test ./... -count=1 -coverprofile=coverage.out"
+
+[tasks."test:integration"]
+run = "go test -tags integration ./integration"
+
+[tasks."test:golden:update"]
+run = "go test ./merger -run TestRun_Golden -update"
