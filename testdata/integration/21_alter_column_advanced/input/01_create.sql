@@ -1,5 +1,5 @@
 CREATE TABLE products (
-    id INTEGER,
+    id INTEGER NOT NULL,
     name TEXT,
     price NUMERIC NOT NULL,
     description TEXT
