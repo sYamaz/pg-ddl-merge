@@ -6,6 +6,7 @@ testdata/merged.sql
 
 # Local Claude overrides
 .claude.local.md
+.claude/worktrees/
 
 # macOS
 .DS_Store
