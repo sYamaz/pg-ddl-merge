@@ -3,6 +3,7 @@ pg-ddl-merge
 
 # Test output
 testdata/merged.sql
+coverage.out
 
 # Local Claude overrides
 .claude.local.md
