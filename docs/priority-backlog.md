@@ -1,67 +1,103 @@
 # 実装優先度バックログ
 
-部分対応（🔶）・未対応（❌）の項目について、実際のマイグレーションへの影響度で優先度を整理したもの。
+`postgres-command-coverage.md` で部分対応（🔶）になっている項目を、
+アプリケーションマイグレーションへの影響度で優先度付けしたもの。
 
 ---
 
 ## 優先度：高
 
-### 1. ~~inline 制約と `DROP CONSTRAINT` の不整合~~ ✅ 対応済み
+### 1. `ALTER EXTENSION` の `UPDATE TO` 対応
 
-**問題（解決済み）**
+**問題**
 
-`CREATE TABLE` でカラムインラインに定義した PRIMARY KEY / UNIQUE / REFERENCES は `col.InlineConstraints` に格納される。
-その後 `ALTER TABLE ... DROP CONSTRAINT` で PostgreSQL が自動付与した名前（`table_pkey` 等）を指定すると
-`t.Constraints`（named constraint リスト）に見つけられずエラーになっていた。
+`ALTER EXTENSION name UPDATE [TO new_version]` は実際のマイグレーションで頻出する
+（例: `ALTER EXTENSION postgis UPDATE TO '3.4.0'`）。
+現状は RENAME TO 以外が UnknownStmt でパススルーされ、バージョン追跡ができない。
 
-**対応内容**（2026-03-28）
+**期待する挙動**
 
-- `merger/parser/parser.go`: `DROP CONSTRAINT IF EXISTS` の `IfExists` フラグを `AlterAction` に正しく伝搬
-- `merger/schema/schema.go`: named constraint に見つからない場合、PostgreSQL 自動命名規則でカラムの inline 制約を検索・除去する `dropInlineConstraintByAutoName()` を追加
-  - `{table}_pkey` → inline `PRIMARY KEY`
-  - `{table}_{col}_key` → inline `UNIQUE`
-  - `{table}_{col}_fkey` → inline `REFERENCES`
-  - `{table}_{col}_check` → inline `CHECK`
-- 統合テストシナリオ `22_inline_constraint_drop` を追加
+- `ALTER EXTENSION name UPDATE TO 'version'` を解析し、`GenericObject.Body` を更新
+- `ADD MEMBER` / `DROP MEMBER` はスコープ外（DBA 操作）として引き続きパススルーで良い
 
 ---
 
-### 2. ~~`ALTER COLUMN TYPE` で inline `REFERENCES` が型不一致になっても検知されない~~ ✅ 警告追加済み
+### 2. `ALTER DOMAIN` の内容変更対応
 
-**問題（部分対応済み）**
+**問題**
 
-カラムに inline FK (`REFERENCES`) がある状態で型変更しても `InlineConstraints` はそのまま保持され、
-エミット結果は valid に見えるが参照先テーブルの型と不一致なら PostgreSQL は適用を拒否する。
+ドメインに制約・デフォルト値変更が含まれるマイグレーションで、内容変更が追跡されない。
+現状 RENAME TO 以外は UnknownStmt でパススルー。
 
-**対応内容**（2026-03-28）
+**期待する挙動**
 
-- `merger/schema/schema.go`: `ActionAlterColumnType` で `InlineConstraints` に `REFERENCES` が含まれる場合、
-  stderr に警告を出力するようにした
+- `ADD CONSTRAINT name CHECK (expr)` → ドメイン定義に制約を追記
+- `DROP CONSTRAINT [IF EXISTS] name` → ドメイン定義から制約を除去
+- `SET DEFAULT expr` / `DROP DEFAULT` → ドメイン定義のデフォルト値を更新
+- `SET NOT NULL` / `DROP NOT NULL` → ドメイン定義の NOT NULL を更新
+- `OWNER TO` / `SET SCHEMA` は警告を出してスキップ（スキーマモデルに反映なし）
 
-> **Note**: 出力 SQL の修正（REFERENCES 句の除去など）は行っていない。
-> PostgreSQL 側でも型変更＋FK は失敗するケースが多く、マイグレーション設計の問題として扱う。
+---
+
+### 3. `ALTER POLICY` の内容変更対応
+
+**問題**
+
+Row Level Security ポリシーの条件変更（`USING` / `WITH CHECK`）はアプリレイヤーのマイグレーションに含まれることがある。
+現状 RENAME TO 以外が UnknownStmt でパススルーされ、前の `CREATE POLICY` と後の `ALTER POLICY` が分離して出力される。
+
+**期待する挙動**
+
+- `ALTER POLICY name ON table [TO roles] [USING (expr)] [WITH CHECK (expr)]` を解析し、
+  `GenericObject.Body`（CREATE POLICY の verbatim 定義）を上書き更新
+- ポリシーが schema 内に存在しない場合は末尾にパススルー
 
 ---
 
 ## 優先度：中
 
-### 3. ~~`ALTER FUNCTION` / `ALTER PROCEDURE` の `OWNER TO` / `SECURITY` 変更~~ ✅ 対応済み
+### 4. `ALTER VIEW` の内容変更対応
 
-**問題（解決済み）**
+**問題**
 
-アプリのマイグレーションで関数の実行権限変更（`OWNER TO`、`SECURITY DEFINER`/`INVOKER`）が含まれる場合がある。
-現状は UnknownStmt でパススルーされるが、後続の DROP/CREATE と組み合わさると出力順序が意図と異なる可能性がある。
+ビューのスキーマ変更やオーナー変更がマイグレーションに含まれる場合、RENAME TO 以外は追跡されない。
 
-**対応内容**（2026-03-29）
+**期待する挙動**
 
-- `merger/parser/ast.go`: `AlterFunctionOptsStmt` を追加（FUNCTION/PROCEDURE の非 RENAME アクション用）
-- `merger/parser/parser.go`: `ALTER FUNCTION/PROCEDURE` で RENAME TO にマッチしない場合、関数名を抽出して `AlterFunctionOptsStmt` にパース
-- `merger/schema/model.go`: `GenericObject` に `PostAlters []string` フィールド追加
-- `merger/schema/schema.go`:
-  - `applyAlterFunctionOpts()` を追加：対象関数が schema に存在すれば `PostAlters` に追記、なければ `Unknowns` にフォールバック
-  - `applyCreateObject()`: `CREATE OR REPLACE` 時に `PostAlters` をリセット（OR REPLACE で再定義された関数は以前の ALTER を引き継がない）
-- `merger/emitter/emitter.go`: FUNCTION/PROCEDURE 出力時、`PostAlters` を CREATE の直後に出力
-- 統合テストシナリオ `24_alter_function_opts` を追加（`SECURITY DEFINER` / `OWNER TO` の適用を確認）
+- `ALTER VIEW name ALTER COLUMN col SET DEFAULT expr` → ビュー定義内のカラムデフォルトを更新（verbatim 保持）
+- `OWNER TO` → 警告を出してスキップ（ビューの verbatim には反映しない）
+- `SET SCHEMA` → 警告を出してスキップ
+- `ALTER COLUMN col DROP DEFAULT` → 同上
+
+---
+
+### 5. `ALTER TABLE` の `RENAME TO` / `RENAME COLUMN` 後の inline 制約追跡
+
+**問題**
+
+テーブルまたはカラムを RENAME した後、`RENAME COLUMN` 後のテーブル制約定義文字列は自動更新されない
+（`CLAUDE.md` にも警告出力の旨が記載されている）。
+カラムインライン定義（InlineConstraints）の `REFERENCES`・`CHECK` 等も同様に文字列が古いまま。
+
+**期待する挙動**
+
+- `RENAME COLUMN old TO new` 時に `Constraints` の定義文字列内の旧カラム名を置換
+- `RENAME TO` 時に inline FK（`REFERENCES` 節）の参照テーブル名が自己参照の場合は更新
+- 完全解決が困難な場合でも、現状の警告出力を維持しつつ追跡精度を上げる
+
+---
+
+### 6. `ALTER TRIGGER` の `RENAME TO` 以外への対応
+
+**問題**
+
+`ALTER TRIGGER name ON table DEPENDS ON EXTENSION ext` など、RENAME TO 以外は UnknownStmt でパススルー。
+アプリマイグレーションでの頻度は低いが、トリガーの依存関係変更で問題になる可能性がある。
+
+**期待する挙動**
+
+- `DEPENDS ON EXTENSION` / `NO DEPENDS ON EXTENSION` はそのままパススルーで良い（DBA 操作に近い）
+- 将来的に `ALTER TRIGGER ... ENABLE/DISABLE` はトリガー定義側に反映できると望ましい
 
 ---
 
@@ -69,7 +105,10 @@
 
 | 項目 | 理由 |
 |------|------|
-| `REINDEX` ❌ | スコープ外扱いが妥当、pass-through で十分 |
-| `REFRESH MATERIALIZED VIEW` ❌ | データ操作、DDL マージ対象外 |
 | `ALTER INDEX` RENAME TO 以外 | `SET TABLESPACE` 等は DBA 操作で app マイグレーションには稀 |
-| `ALTER VIEW` / `ALTER SCHEMA` / `ALTER MATERIALIZED VIEW` RENAME TO 以外 | 同上 |
+| `ALTER MATERIALIZED VIEW` RENAME TO 以外 | 同上 |
+| `ALTER SCHEMA` RENAME TO 以外 | 同上 |
+| `ALTER RULE` RENAME TO 以外 | ルール自体の使用頻度が低い |
+| `REINDEX` | 運用コマンド、pass-through で十分 |
+| `REFRESH MATERIALIZED VIEW` | データ操作のためパススルーで十分 |
+| inline 制約の構造追跡強化（PRIMARY KEY・UNIQUE・CHECK） | verbatim 保持で現状は動作するため、DROP CONSTRAINT 対応（完了）で十分な場合が多い |
