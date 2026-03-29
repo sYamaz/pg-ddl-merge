@@ -20,6 +20,7 @@ const (
 	StmtAlterSequenceOpts
 	StmtAlterObject
 	StmtAlterFunctionOpts
+	StmtAlterObjectOpts
 	StmtTruncate
 	StmtUnknown
 )
@@ -240,6 +241,17 @@ type AlterFunctionOptsStmt struct {
 	SQL  string     // verbatim full SQL (without trailing semicolon)
 }
 
+// AlterObjectOptsStmt represents ALTER <object> with non-RENAME content-changing actions
+// for EXTENSION (UPDATE [TO version]), DOMAIN (ADD/DROP CONSTRAINT, SET/DROP DEFAULT,
+// SET/DROP NOT NULL), and POLICY (TO/USING/WITH CHECK changes).
+// If the named object exists in the schema, the statement is stored as a PostAlter;
+// otherwise it falls through to Unknowns.
+type AlterObjectOptsStmt struct {
+	Kind ObjectKind
+	Name string // normalized key ("policyname_on_tablename" for POLICY)
+	SQL  string // verbatim full SQL (without trailing semicolon)
+}
+
 type UnknownStmt struct {
 	Raw string
 }
@@ -261,5 +273,6 @@ func (s AlterSequenceStmt) stmtKind() StatementKind     { return StmtAlterSequen
 func (s AlterSequenceOptsStmt) stmtKind() StatementKind { return StmtAlterSequenceOpts }
 func (s AlterObjectStmt) stmtKind() StatementKind       { return StmtAlterObject }
 func (s AlterFunctionOptsStmt) stmtKind() StatementKind { return StmtAlterFunctionOpts }
+func (s AlterObjectOptsStmt) stmtKind() StatementKind   { return StmtAlterObjectOpts }
 func (s TruncateStmt) stmtKind() StatementKind          { return StmtTruncate }
 func (s UnknownStmt) stmtKind() StatementKind           { return StmtUnknown }

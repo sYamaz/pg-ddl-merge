@@ -68,9 +68,12 @@ testdata/
 - `ALTER FUNCTION` / `ALTER PROCEDURE`: `RENAME TO` + `OWNER TO` / `SECURITY DEFINER/INVOKER` などの非 RENAME アクションに対応。対象関数が schema 内に存在する場合は CREATE の直後に出力。存在しない場合は末尾にパススルー
 - `CREATE [CONSTRAINT] [OR REPLACE] TRIGGER` / `DROP TRIGGER`
 - `CREATE DOMAIN` / `DROP DOMAIN`
+- `ALTER DOMAIN`: `RENAME TO` + `ADD/DROP CONSTRAINT`, `SET/DROP DEFAULT`, `SET/DROP NOT NULL` などの内容変更に対応（CREATE 直後に出力）。`OWNER TO` / `SET SCHEMA` は警告を出してスキップ
 - `CREATE EXTENSION [IF NOT EXISTS]` / `DROP EXTENSION`
+- `ALTER EXTENSION`: `RENAME TO` + `UPDATE [TO version]` に対応（CREATE 直後に出力）
 - `CREATE SCHEMA` / `DROP SCHEMA`
 - `CREATE POLICY` / `DROP POLICY`
+- `ALTER POLICY`: `RENAME TO` + `USING` / `WITH CHECK` / `TO roles` などの内容変更に対応（CREATE 直後に出力）。ポリシーが schema 内に存在しない場合は末尾にパススルー
 - `CREATE [OR REPLACE] RULE` / `DROP RULE`
 - `ALTER INDEX/VIEW/…`: `RENAME TO` に対応。それ以外は UnknownStmt でパススルー
 - 未認識ステートメント → 末尾に verbatim pass-through

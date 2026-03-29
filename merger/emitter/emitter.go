@@ -37,7 +37,12 @@ func Emit(s *schema.Schema) string {
 	for _, obj := range s.Objects {
 		if obj.Kind == parser.ObjExtension {
 			sb.WriteString(obj.SQL)
-			sb.WriteString(";\n\n")
+			sb.WriteString(";\n")
+			for _, alter := range obj.PostAlters {
+				sb.WriteString(alter)
+				sb.WriteString(";\n")
+			}
+			sb.WriteString("\n")
 		}
 	}
 
@@ -71,7 +76,12 @@ func Emit(s *schema.Schema) string {
 	for _, obj := range s.Objects {
 		if obj.Kind == parser.ObjDomain {
 			sb.WriteString(obj.SQL)
-			sb.WriteString(";\n\n")
+			sb.WriteString(";\n")
+			for _, alter := range obj.PostAlters {
+				sb.WriteString(alter)
+				sb.WriteString(";\n")
+			}
+			sb.WriteString("\n")
 		}
 	}
 
@@ -140,7 +150,12 @@ func Emit(s *schema.Schema) string {
 	for _, obj := range s.Objects {
 		if obj.Kind == parser.ObjPolicy || obj.Kind == parser.ObjRule {
 			sb.WriteString(obj.SQL)
-			sb.WriteString(";\n\n")
+			sb.WriteString(";\n")
+			for _, alter := range obj.PostAlters {
+				sb.WriteString(alter)
+				sb.WriteString(";\n")
+			}
+			sb.WriteString("\n")
 		}
 	}
 

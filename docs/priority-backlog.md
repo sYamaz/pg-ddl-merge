@@ -5,52 +5,20 @@
 
 ---
 
-## 優先度：高
+## ✅ 実装済み（旧優先度：高）
 
 ### 1. `ALTER EXTENSION` の `UPDATE TO` 対応
 
-**問題**
-
-`ALTER EXTENSION name UPDATE [TO new_version]` は実際のマイグレーションで頻出する
-（例: `ALTER EXTENSION postgis UPDATE TO '3.4.0'`）。
-現状は RENAME TO 以外が UnknownStmt でパススルーされ、バージョン追跡ができない。
-
-**期待する挙動**
-
-- `ALTER EXTENSION name UPDATE TO 'version'` を解析し、`GenericObject.Body` を更新
-- `ADD MEMBER` / `DROP MEMBER` はスコープ外（DBA 操作）として引き続きパススルーで良い
-
----
+`ALTER EXTENSION name UPDATE [TO version]` を `AlterObjectOptsStmt` としてパースし、
+CREATE EXTENSION の直後に PostAlter として出力。`ADD MEMBER` / `DROP MEMBER` は DBA 操作のためスコープ外・パススルーのまま。
 
 ### 2. `ALTER DOMAIN` の内容変更対応
 
-**問題**
-
-ドメインに制約・デフォルト値変更が含まれるマイグレーションで、内容変更が追跡されない。
-現状 RENAME TO 以外は UnknownStmt でパススルー。
-
-**期待する挙動**
-
-- `ADD CONSTRAINT name CHECK (expr)` → ドメイン定義に制約を追記
-- `DROP CONSTRAINT [IF EXISTS] name` → ドメイン定義から制約を除去
-- `SET DEFAULT expr` / `DROP DEFAULT` → ドメイン定義のデフォルト値を更新
-- `SET NOT NULL` / `DROP NOT NULL` → ドメイン定義の NOT NULL を更新
-- `OWNER TO` / `SET SCHEMA` は警告を出してスキップ（スキーマモデルに反映なし）
-
----
+`ADD/DROP CONSTRAINT`, `SET/DROP DEFAULT`, `SET/DROP NOT NULL` などを PostAlter として CREATE DOMAIN の直後に出力。`OWNER TO` / `SET SCHEMA` は警告を出してスキップ。
 
 ### 3. `ALTER POLICY` の内容変更対応
 
-**問題**
-
-Row Level Security ポリシーの条件変更（`USING` / `WITH CHECK`）はアプリレイヤーのマイグレーションに含まれることがある。
-現状 RENAME TO 以外が UnknownStmt でパススルーされ、前の `CREATE POLICY` と後の `ALTER POLICY` が分離して出力される。
-
-**期待する挙動**
-
-- `ALTER POLICY name ON table [TO roles] [USING (expr)] [WITH CHECK (expr)]` を解析し、
-  `GenericObject.Body`（CREATE POLICY の verbatim 定義）を上書き更新
-- ポリシーが schema 内に存在しない場合は末尾にパススルー
+`TO roles` / `USING (expr)` / `WITH CHECK (expr)` などの内容変更アクションを PostAlter として CREATE POLICY の直後に出力。ポリシーが schema 内に存在しない場合は末尾にパススルー。
 
 ---
 

@@ -26,7 +26,10 @@ var (
 	reDropType            = regexp.MustCompile(`(?i)^DROP\s+TYPE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
 	reAlterType           = regexp.MustCompile(`(?i)^ALTER\s+TYPE\s+(\S+)\s+(.+)`)
 	reAlterColUsing       = regexp.MustCompile(`(?i)\s+USING\s+.+$`)
-	reAlterFuncOrProcName = regexp.MustCompile(`(?i)^ALTER\s+(?:FUNCTION|PROCEDURE)\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\([^)]*\))?\s+`)
+	reAlterFuncOrProcName  = regexp.MustCompile(`(?i)^ALTER\s+(?:FUNCTION|PROCEDURE)\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\([^)]*\))?\s+`)
+	reAlterExtensionUpdate = regexp.MustCompile(`(?i)^ALTER\s+EXTENSION\s+(\S+)\s+UPDATE\b`)
+	reAlterDomainBase      = regexp.MustCompile(`(?i)^ALTER\s+DOMAIN\s+(?:IF\s+EXISTS\s+)?(\S+)\s+`)
+	reAlterPolicyBase      = regexp.MustCompile(`(?i)^ALTER\s+POLICY\s+(\S+)\s+ON\s+(\S+)\s+`)
 )
 
 // normalizeIdent removes surrounding double-quotes and lowercases for key lookup.
@@ -1137,6 +1140,14 @@ func parseAlterObject(sql string) (Statement, error) {
 				newName := normalizeIdent(strings.TrimSuffix(m[3], ";")) + "_on_" + table
 				return AlterObjectStmt{Kind: e.kind, OldName: oldName, NewName: newName}, nil
 			}
+			// For POLICY: associate non-RENAME content changes with the named policy.
+			if e.kind == ObjPolicy {
+				if m := reAlterPolicyBase.FindStringSubmatch(sql); m != nil {
+					table := normalizeIdent(strings.TrimSuffix(m[2], ";"))
+					name := normalizeIdent(m[1]) + "_on_" + table
+					return AlterObjectOptsStmt{Kind: ObjPolicy, Name: name, SQL: sql}, nil
+				}
+			}
 			return UnknownStmt{Raw: sql}, nil
 		}
 	}
@@ -1159,6 +1170,18 @@ func parseAlterObject(sql string) (Statement, error) {
 						Name: normalizeIdent(m[1]),
 						SQL:  sql,
 					}, nil
+				}
+			}
+			// For EXTENSION: UPDATE [TO version] action.
+			if e.kind == ObjExtension {
+				if m := reAlterExtensionUpdate.FindStringSubmatch(sql); m != nil {
+					return AlterObjectOptsStmt{Kind: ObjExtension, Name: normalizeIdent(m[1]), SQL: sql}, nil
+				}
+			}
+			// For DOMAIN: non-RENAME content changes (ADD/DROP CONSTRAINT, SET/DROP DEFAULT, etc.).
+			if e.kind == ObjDomain {
+				if m := reAlterDomainBase.FindStringSubmatch(sql); m != nil {
+					return AlterObjectOptsStmt{Kind: ObjDomain, Name: normalizeIdent(m[1]), SQL: sql}, nil
 				}
 			}
 			return UnknownStmt{Raw: sql}, nil
