@@ -3,53 +3,51 @@
 `postgres-command-coverage.md` で部分対応（🔶）になっている項目を、
 アプリケーションマイグレーションへの影響度で優先度付けしたもの。
 
----
-
-## ✅ 実装済み（旧優先度：高・中）
-
-### 1. `ALTER EXTENSION` の `UPDATE TO` 対応
-
-`ALTER EXTENSION name UPDATE [TO version]` を `AlterObjectOptsStmt` としてパースし、
-CREATE EXTENSION の直後に PostAlter として出力。`ADD MEMBER` / `DROP MEMBER` は DBA 操作のためスコープ外・パススルーのまま。
-
-### 2. `ALTER DOMAIN` の内容変更対応
-
-`ADD/DROP CONSTRAINT`, `SET/DROP DEFAULT`, `SET/DROP NOT NULL` などを PostAlter として CREATE DOMAIN の直後に出力。`OWNER TO` / `SET SCHEMA` は警告を出してスキップ。
-
-### 3. `ALTER POLICY` の内容変更対応
-
-`TO roles` / `USING (expr)` / `WITH CHECK (expr)` などの内容変更アクションを PostAlter として CREATE POLICY の直後に出力。ポリシーが schema 内に存在しない場合は末尾にパススルー。
+> **注:** `ALTER VIEW` の内容変更対応（ALTER COLUMN SET/DROP DEFAULT・SET/RESET options）は
+> d16441f にて実装済み。coverage doc の 🔶 表記は更新要。
 
 ---
 
-## ✅ 実装済み（旧優先度：中）
+## 優先度：中
 
-### 4. `ALTER VIEW` の内容変更対応
+### 1. カラムインライン制約の `RENAME COLUMN` 追跡
 
-`ALTER VIEW name ALTER COLUMN col SET DEFAULT expr` などの内容変更を `AlterObjectOptsStmt` としてパースし、
-CREATE VIEW の直後に PostAlter として出力。`OWNER TO` / `SET SCHEMA` は警告を出してスキップ。
+`PRIMARY KEY`・`UNIQUE`・`REFERENCES reftable`・`CHECK (expr)` のカラムインライン記述は
+現在 `InlineConstraints` に verbatim 保持されており、`RENAME COLUMN old TO new` を実行しても
+その中のカラム名は更新されない。
 
-### 5. `ALTER TABLE` の `RENAME TO` / `RENAME COLUMN` 後の inline 制約追跡
+テーブルレベル制約（`Constraints`）のカラム名更新（ワード境界置換）は実装済みだが、
+インライン制約は対象外のため、以下のようなケースでマージ結果が sequential 適用と乖離する可能性がある。
 
-- `RENAME COLUMN old TO new` 時に `Constraints` の定義文字列内の旧カラム名をワード境界マッチで置換
-- `RENAME TO` 時に自己参照 `FOREIGN KEY ... REFERENCES tablename` の旧テーブル名を更新
+```sql
+-- 例: インライン CHECK に旧カラム名が残る
+ALTER TABLE t RENAME COLUMN amount TO price;
+-- → CHECK (amount > 0) が CHECK (price > 0) に更新されない
+```
 
-### 6. `ALTER TRIGGER` の `RENAME TO` 以外
+**対象構文：**
+| 項目 | InlineConstraints の例 |
+|------|----------------------|
+| `CHECK (expr)` カラムインライン | `CHECK (col > 0)` |
+| `REFERENCES reftable [(col)]` | `REFERENCES orders (col_id)` |
+| `PRIMARY KEY` カラムインライン | `PRIMARY KEY` ← カラム名は列名そのものなので影響なし |
+| `UNIQUE` カラムインライン | `UNIQUE` ← 同上 |
 
-`DEPENDS ON EXTENSION` / `NO DEPENDS ON EXTENSION` はそのままパススルー（UnknownStmt → 末尾出力）。
-`ENABLE/DISABLE` は PostgreSQL では `ALTER TABLE ... ENABLE/DISABLE TRIGGER` 構文であり、
-ALTER TABLE ActionSkip として処理される。ALTER TRIGGER 固有の追加対応は不要と判断。
+実質的に影響が出るのは `CHECK` と `REFERENCES ... (col)` のみ。`PRIMARY KEY`・`UNIQUE` インラインは
+カラム名を式中に持たないため自動更新不要。
 
 ---
 
 ## 優先度：低
 
+以下はいずれも DBA 操作・使用頻度が低く、アプリマイグレーションに含まれることは稀。
+現状の UnknownStmt パススルーで実用上問題ない。
+
 | 項目 | 理由 |
 |------|------|
-| `ALTER INDEX` RENAME TO 以外 | `SET TABLESPACE` 等は DBA 操作で app マイグレーションには稀 |
-| `ALTER MATERIALIZED VIEW` RENAME TO 以外 | 同上 |
-| `ALTER SCHEMA` RENAME TO 以外 | 同上 |
+| `ALTER INDEX` RENAME TO 以外 | `SET TABLESPACE`・`CLUSTER ON` 等は DBA 操作 |
+| `ALTER MATERIALIZED VIEW` RENAME TO 以外 | 同上（`SET TABLESPACE` 等） |
+| `ALTER SCHEMA` RENAME TO 以外 | `OWNER TO` 等はロール管理寄り |
+| `ALTER TRIGGER` RENAME TO 以外 | `DEPENDS ON EXTENSION` は稀。`ENABLE/DISABLE` は ALTER TABLE 経由で対応済み |
 | `ALTER RULE` RENAME TO 以外 | ルール自体の使用頻度が低い |
-| `REINDEX` | 運用コマンド、pass-through で十分 |
-| `REFRESH MATERIALIZED VIEW` | データ操作のためパススルーで十分 |
-| inline 制約の構造追跡強化（PRIMARY KEY・UNIQUE・CHECK） | verbatim 保持で現状は動作するため、DROP CONSTRAINT 対応（完了）で十分な場合が多い |
+| `ALTER TABLE`（概要 🔶）| 詳細カバレッジは全項目 ✅。概要の 🔶 は summary 表示の都合 |
