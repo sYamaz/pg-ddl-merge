@@ -111,7 +111,12 @@ func Emit(s *schema.Schema) string {
 	for _, obj := range s.Objects {
 		if obj.Kind == parser.ObjFunction || obj.Kind == parser.ObjProcedure {
 			sb.WriteString(obj.SQL)
-			sb.WriteString(";\n\n")
+			sb.WriteString(";\n")
+			for _, alter := range obj.PostAlters {
+				sb.WriteString(alter)
+				sb.WriteString(";\n")
+			}
+			sb.WriteString("\n")
 		}
 	}
 

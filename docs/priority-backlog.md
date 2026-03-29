@@ -45,10 +45,23 @@
 
 ## 優先度：中
 
-### 3. `ALTER FUNCTION` / `ALTER PROCEDURE` の `OWNER TO` / `SECURITY` 変更
+### 3. ~~`ALTER FUNCTION` / `ALTER PROCEDURE` の `OWNER TO` / `SECURITY` 変更~~ ✅ 対応済み
+
+**問題（解決済み）**
 
 アプリのマイグレーションで関数の実行権限変更（`OWNER TO`、`SECURITY DEFINER`/`INVOKER`）が含まれる場合がある。
 現状は UnknownStmt でパススルーされるが、後続の DROP/CREATE と組み合わさると出力順序が意図と異なる可能性がある。
+
+**対応内容**（2026-03-29）
+
+- `merger/parser/ast.go`: `AlterFunctionOptsStmt` を追加（FUNCTION/PROCEDURE の非 RENAME アクション用）
+- `merger/parser/parser.go`: `ALTER FUNCTION/PROCEDURE` で RENAME TO にマッチしない場合、関数名を抽出して `AlterFunctionOptsStmt` にパース
+- `merger/schema/model.go`: `GenericObject` に `PostAlters []string` フィールド追加
+- `merger/schema/schema.go`:
+  - `applyAlterFunctionOpts()` を追加：対象関数が schema に存在すれば `PostAlters` に追記、なければ `Unknowns` にフォールバック
+  - `applyCreateObject()`: `CREATE OR REPLACE` 時に `PostAlters` をリセット（OR REPLACE で再定義された関数は以前の ALTER を引き継がない）
+- `merger/emitter/emitter.go`: FUNCTION/PROCEDURE 出力時、`PostAlters` を CREATE の直後に出力
+- 統合テストシナリオ `24_alter_function_opts` を追加（`SECURITY DEFINER` / `OWNER TO` の適用を確認）
 
 ---
 

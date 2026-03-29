@@ -1,0 +1,2 @@
+ALTER FUNCTION secure_func() SECURITY DEFINER;
+ALTER FUNCTION secure_func() OWNER TO postgres;

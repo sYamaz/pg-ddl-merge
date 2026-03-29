@@ -58,6 +58,8 @@ func (s *Schema) Apply(stmt parser.Statement) error {
 		s.applyTruncate(v)
 	case parser.AlterObjectStmt:
 		return s.applyAlterObject(v)
+	case parser.AlterFunctionOptsStmt:
+		return s.applyAlterFunctionOpts(v)
 	case parser.UnknownStmt:
 		s.Unknowns = append(s.Unknowns, v.Raw)
 	}
@@ -548,6 +550,7 @@ func (s *Schema) applyCreateObject(v parser.CreateObjectStmt) error {
 	if idx, exists := s.objectIdx[key]; exists {
 		if v.OrReplace {
 			s.Objects[idx].SQL = v.SQL
+			s.Objects[idx].PostAlters = nil // fresh definition clears prior ALTERs
 			return nil
 		}
 		return fmt.Errorf("duplicate CREATE %s: %s", v.Kind, v.Name)
@@ -674,6 +677,18 @@ func (s *Schema) applyAlterObject(v parser.AlterObjectStmt) error {
 	s.Objects[idx].Name = v.NewName
 	delete(s.objectIdx, oldKey)
 	s.objectIdx[newKey] = idx
+	return nil
+}
+
+func (s *Schema) applyAlterFunctionOpts(v parser.AlterFunctionOptsStmt) error {
+	key := objectKey(v.Kind, v.Name)
+	idx, ok := s.objectIdx[key]
+	if !ok {
+		// Function not found in schema (may be defined externally) — fall back to pass-through.
+		s.Unknowns = append(s.Unknowns, v.SQL)
+		return nil
+	}
+	s.Objects[idx].PostAlters = append(s.Objects[idx].PostAlters, v.SQL)
 	return nil
 }
 
