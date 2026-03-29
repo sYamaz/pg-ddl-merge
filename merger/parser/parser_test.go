@@ -1267,10 +1267,14 @@ func TestParseAlterPolicy_RenameTo(t *testing.T) {
 	}
 }
 
-func TestParseAlterView_OtherAction_PassThrough(t *testing.T) {
+func TestParseAlterView_OtherAction_AlterObjectOpts(t *testing.T) {
 	stmt := mustParse(t, "ALTER VIEW myview SET (security_barrier=on)")
-	if _, ok := stmt.(UnknownStmt); !ok {
-		t.Errorf("expected UnknownStmt, got %T", stmt)
+	s, ok := stmt.(AlterObjectOptsStmt)
+	if !ok {
+		t.Fatalf("expected AlterObjectOptsStmt, got %T", stmt)
+	}
+	if s.Kind != ObjView || s.Name != "myview" {
+		t.Errorf("unexpected: %+v", s)
 	}
 }
 

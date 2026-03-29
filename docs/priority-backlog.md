@@ -5,7 +5,7 @@
 
 ---
 
-## ✅ 実装済み（旧優先度：高）
+## ✅ 実装済み（旧優先度：高・中）
 
 ### 1. `ALTER EXTENSION` の `UPDATE TO` 対応
 
@@ -22,50 +22,23 @@ CREATE EXTENSION の直後に PostAlter として出力。`ADD MEMBER` / `DROP M
 
 ---
 
-## 優先度：中
+## ✅ 実装済み（旧優先度：中）
 
 ### 4. `ALTER VIEW` の内容変更対応
 
-**問題**
-
-ビューのスキーマ変更やオーナー変更がマイグレーションに含まれる場合、RENAME TO 以外は追跡されない。
-
-**期待する挙動**
-
-- `ALTER VIEW name ALTER COLUMN col SET DEFAULT expr` → ビュー定義内のカラムデフォルトを更新（verbatim 保持）
-- `OWNER TO` → 警告を出してスキップ（ビューの verbatim には反映しない）
-- `SET SCHEMA` → 警告を出してスキップ
-- `ALTER COLUMN col DROP DEFAULT` → 同上
-
----
+`ALTER VIEW name ALTER COLUMN col SET DEFAULT expr` などの内容変更を `AlterObjectOptsStmt` としてパースし、
+CREATE VIEW の直後に PostAlter として出力。`OWNER TO` / `SET SCHEMA` は警告を出してスキップ。
 
 ### 5. `ALTER TABLE` の `RENAME TO` / `RENAME COLUMN` 後の inline 制約追跡
 
-**問題**
+- `RENAME COLUMN old TO new` 時に `Constraints` の定義文字列内の旧カラム名をワード境界マッチで置換
+- `RENAME TO` 時に自己参照 `FOREIGN KEY ... REFERENCES tablename` の旧テーブル名を更新
 
-テーブルまたはカラムを RENAME した後、`RENAME COLUMN` 後のテーブル制約定義文字列は自動更新されない
-（`CLAUDE.md` にも警告出力の旨が記載されている）。
-カラムインライン定義（InlineConstraints）の `REFERENCES`・`CHECK` 等も同様に文字列が古いまま。
+### 6. `ALTER TRIGGER` の `RENAME TO` 以外
 
-**期待する挙動**
-
-- `RENAME COLUMN old TO new` 時に `Constraints` の定義文字列内の旧カラム名を置換
-- `RENAME TO` 時に inline FK（`REFERENCES` 節）の参照テーブル名が自己参照の場合は更新
-- 完全解決が困難な場合でも、現状の警告出力を維持しつつ追跡精度を上げる
-
----
-
-### 6. `ALTER TRIGGER` の `RENAME TO` 以外への対応
-
-**問題**
-
-`ALTER TRIGGER name ON table DEPENDS ON EXTENSION ext` など、RENAME TO 以外は UnknownStmt でパススルー。
-アプリマイグレーションでの頻度は低いが、トリガーの依存関係変更で問題になる可能性がある。
-
-**期待する挙動**
-
-- `DEPENDS ON EXTENSION` / `NO DEPENDS ON EXTENSION` はそのままパススルーで良い（DBA 操作に近い）
-- 将来的に `ALTER TRIGGER ... ENABLE/DISABLE` はトリガー定義側に反映できると望ましい
+`DEPENDS ON EXTENSION` / `NO DEPENDS ON EXTENSION` はそのままパススルー（UnknownStmt → 末尾出力）。
+`ENABLE/DISABLE` は PostgreSQL では `ALTER TABLE ... ENABLE/DISABLE TRIGGER` 構文であり、
+ALTER TABLE ActionSkip として処理される。ALTER TRIGGER 固有の追加対応は不要と判断。
 
 ---
 

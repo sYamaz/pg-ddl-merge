@@ -13,6 +13,9 @@ import (
 // reAlterDomainAction extracts the action portion after "ALTER DOMAIN [IF EXISTS] name ".
 var reAlterDomainAction = regexp.MustCompile(`(?i)^ALTER\s+DOMAIN\s+(?:IF\s+EXISTS\s+)?\S+\s+(.+)`)
 
+// reAlterViewAction extracts the action portion after "ALTER VIEW [IF EXISTS] name ".
+var reAlterViewAction = regexp.MustCompile(`(?i)^ALTER\s+VIEW\s+(?:IF\s+EXISTS\s+)?\S+\s+(.+)`)
+
 func normIdent(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, `"`)
@@ -185,14 +188,33 @@ func (s *Schema) applyAction(t *Table, action parser.AlterAction, oldKey string)
 		if idx < 0 {
 			return fmt.Errorf("RENAME COLUMN: column not found: %s", action.Column)
 		}
-		// warn if table has constraints that might reference the old name
-		if len(t.Constraints) > 0 {
-			fmt.Fprintf(os.Stderr, "warning: renaming column %s.%s — table constraints referencing this column by name are not updated\n", t.Name, action.Column)
+		// Update table constraint definitions that reference the old column name.
+		reOldCol := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(action.Column) + `\b`)
+		for i, c := range t.Constraints {
+			t.Constraints[i].Definition = reOldCol.ReplaceAllString(c.Definition, action.NewName)
 		}
 		t.Columns[idx].Name = action.NewName
 
 	case parser.ActionRenameTo:
 		newKey := normIdent(action.NewName)
+		// Update self-referencing FOREIGN KEY constraints in table constraint definitions.
+		reSelfRef := regexp.MustCompile(`(?i)\bREFERENCES\s+` + regexp.QuoteMeta(t.Name) + `\b`)
+		for i, c := range t.Constraints {
+			t.Constraints[i].Definition = reSelfRef.ReplaceAllStringFunc(c.Definition, func(match string) string {
+				// Preserve "REFERENCES " prefix, replace only the table name.
+				return match[:strings.Index(strings.ToUpper(match), strings.ToUpper(t.Name))] + action.NewName
+			})
+		}
+		// Update self-referencing inline REFERENCES constraints in column definitions.
+		for i, col := range t.Columns {
+			for j, ic := range col.InlineConstraints {
+				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(ic)), "REFERENCES") {
+					t.Columns[i].InlineConstraints[j] = reSelfRef.ReplaceAllStringFunc(ic, func(match string) string {
+						return match[:strings.Index(strings.ToUpper(match), strings.ToUpper(t.Name))] + action.NewName
+					})
+				}
+			}
+		}
 		delete(s.tableIndex, oldKey)
 		t.Name = action.NewName
 		s.tableIndex[newKey] = s.tableIndex[oldKey]
@@ -706,6 +728,15 @@ func (s *Schema) applyAlterObjectOpts(v parser.AlterObjectOptsStmt) error {
 		if m := reAlterDomainAction.FindStringSubmatch(v.SQL); m != nil {
 			if reDomainOwnerOrSchema.MatchString(m[1]) {
 				fmt.Fprintf(os.Stderr, "warning: ALTER DOMAIN OWNER TO / SET SCHEMA is not tracked: %s\n", v.SQL)
+				return nil
+			}
+		}
+	}
+	// For VIEW: OWNER TO and SET SCHEMA are not tracked — warn and skip.
+	if v.Kind == parser.ObjView {
+		if m := reAlterViewAction.FindStringSubmatch(v.SQL); m != nil {
+			if reDomainOwnerOrSchema.MatchString(m[1]) {
+				fmt.Fprintf(os.Stderr, "warning: ALTER VIEW OWNER TO / SET SCHEMA is not tracked: %s\n", v.SQL)
 				return nil
 			}
 		}
