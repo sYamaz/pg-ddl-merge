@@ -1,0 +1,1 @@
+ALTER EXTENSION hstore UPDATE;

@@ -10,6 +10,9 @@ import (
 	"github.com/sYamaz/pg-ddl-merge/merger/parser"
 )
 
+// reAlterDomainAction extracts the action portion after "ALTER DOMAIN [IF EXISTS] name ".
+var reAlterDomainAction = regexp.MustCompile(`(?i)^ALTER\s+DOMAIN\s+(?:IF\s+EXISTS\s+)?\S+\s+(.+)`)
+
 func normIdent(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, `"`)
@@ -60,6 +63,8 @@ func (s *Schema) Apply(stmt parser.Statement) error {
 		return s.applyAlterObject(v)
 	case parser.AlterFunctionOptsStmt:
 		return s.applyAlterFunctionOpts(v)
+	case parser.AlterObjectOptsStmt:
+		return s.applyAlterObjectOpts(v)
 	case parser.UnknownStmt:
 		s.Unknowns = append(s.Unknowns, v.Raw)
 	}
@@ -685,6 +690,30 @@ func (s *Schema) applyAlterFunctionOpts(v parser.AlterFunctionOptsStmt) error {
 	idx, ok := s.objectIdx[key]
 	if !ok {
 		// Function not found in schema (may be defined externally) — fall back to pass-through.
+		s.Unknowns = append(s.Unknowns, v.SQL)
+		return nil
+	}
+	s.Objects[idx].PostAlters = append(s.Objects[idx].PostAlters, v.SQL)
+	return nil
+}
+
+var reDomainOwnerOrSchema = regexp.MustCompile(`(?i)^\s*(OWNER\s+TO|SET\s+SCHEMA)\s+`)
+
+func (s *Schema) applyAlterObjectOpts(v parser.AlterObjectOptsStmt) error {
+	// For DOMAIN: OWNER TO and SET SCHEMA are not tracked — warn and skip.
+	if v.Kind == parser.ObjDomain {
+		// Extract the action portion after "ALTER DOMAIN name "
+		if m := reAlterDomainAction.FindStringSubmatch(v.SQL); m != nil {
+			if reDomainOwnerOrSchema.MatchString(m[1]) {
+				fmt.Fprintf(os.Stderr, "warning: ALTER DOMAIN OWNER TO / SET SCHEMA is not tracked: %s\n", v.SQL)
+				return nil
+			}
+		}
+	}
+	key := objectKey(v.Kind, v.Name)
+	idx, ok := s.objectIdx[key]
+	if !ok {
+		// Object not found in schema — fall back to pass-through.
 		s.Unknowns = append(s.Unknowns, v.SQL)
 		return nil
 	}
