@@ -30,6 +30,7 @@ var (
 	reAlterExtensionUpdate = regexp.MustCompile(`(?i)^ALTER\s+EXTENSION\s+(\S+)\s+UPDATE\b`)
 	reAlterDomainBase      = regexp.MustCompile(`(?i)^ALTER\s+DOMAIN\s+(?:IF\s+EXISTS\s+)?(\S+)\s+`)
 	reAlterPolicyBase      = regexp.MustCompile(`(?i)^ALTER\s+POLICY\s+(\S+)\s+ON\s+(\S+)\s+`)
+	reAlterViewBase        = regexp.MustCompile(`(?i)^ALTER\s+VIEW\s+(?:IF\s+EXISTS\s+)?(\S+)\s+`)
 )
 
 // normalizeIdent removes surrounding double-quotes and lowercases for key lookup.
@@ -1182,6 +1183,12 @@ func parseAlterObject(sql string) (Statement, error) {
 			if e.kind == ObjDomain {
 				if m := reAlterDomainBase.FindStringSubmatch(sql); m != nil {
 					return AlterObjectOptsStmt{Kind: ObjDomain, Name: normalizeIdent(m[1]), SQL: sql}, nil
+				}
+			}
+			// For VIEW: non-RENAME content changes (ALTER COLUMN SET/DROP DEFAULT, SET/RESET options, etc.).
+			if e.kind == ObjView {
+				if m := reAlterViewBase.FindStringSubmatch(sql); m != nil {
+					return AlterObjectOptsStmt{Kind: ObjView, Name: normalizeIdent(m[1]), SQL: sql}, nil
 				}
 			}
 			return UnknownStmt{Raw: sql}, nil

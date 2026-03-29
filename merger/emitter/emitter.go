@@ -134,7 +134,12 @@ func Emit(s *schema.Schema) string {
 	for _, obj := range s.Objects {
 		if obj.Kind == parser.ObjView || obj.Kind == parser.ObjMatView {
 			sb.WriteString(obj.SQL)
-			sb.WriteString(";\n\n")
+			sb.WriteString(";\n")
+			for _, alter := range obj.PostAlters {
+				sb.WriteString(alter)
+				sb.WriteString(";\n")
+			}
+			sb.WriteString("\n")
 		}
 	}
 

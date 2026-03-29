@@ -1,0 +1,1 @@
+ALTER VIEW dept_salaries ALTER COLUMN salary SET DEFAULT 0;

@@ -62,6 +62,7 @@ testdata/
 - `DROP TYPE` / `ALTER TYPE`（`ADD VALUE`, `RENAME VALUE`, `RENAME TO`）
 - `TRUNCATE TABLE`
 - `CREATE [OR REPLACE] VIEW` / `DROP VIEW`
+- `ALTER VIEW`: `RENAME TO` + `ALTER COLUMN SET/DROP DEFAULT`, `SET/RESET options` などの内容変更に対応（CREATE 直後に出力）。`OWNER TO` / `SET SCHEMA` は警告を出してスキップ
 - `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW`
 - `CREATE [OR REPLACE] FUNCTION` / `DROP FUNCTION`
 - `CREATE [OR REPLACE] PROCEDURE` / `DROP PROCEDURE`
@@ -75,7 +76,9 @@ testdata/
 - `CREATE POLICY` / `DROP POLICY`
 - `ALTER POLICY`: `RENAME TO` + `USING` / `WITH CHECK` / `TO roles` などの内容変更に対応（CREATE 直後に出力）。ポリシーが schema 内に存在しない場合は末尾にパススルー
 - `CREATE [OR REPLACE] RULE` / `DROP RULE`
-- `ALTER INDEX/VIEW/…`: `RENAME TO` に対応。それ以外は UnknownStmt でパススルー
+- `ALTER INDEX/MATERIALIZED VIEW/SCHEMA/…`: `RENAME TO` に対応。それ以外は UnknownStmt でパススルー
+- `RENAME COLUMN` 後、テーブル制約定義（`CHECK`, `FOREIGN KEY` など）内のカラム名を自動更新
+- `RENAME TO` 後、テーブル制約の自己参照 `REFERENCES` 内のテーブル名を自動更新
 - 未認識ステートメント → 末尾に verbatim pass-through
 
 ## 出力順序
@@ -108,5 +111,5 @@ testdata/integration/NN_scenario_name/
 
 - `merger` パッケージ本体は外部依存なし（stdlib のみ）。`integration` パッケージは testcontainers・lib/pq を使用
 - FK 依存のトポロジカルソートは未対応。テーブルは最初の `CREATE TABLE` 登場順で出力される
-- `RENAME COLUMN` 後、テーブル制約定義の文字列は自動更新されない（stderr に警告を出力）
+- インライン制約（`REFERENCES`, `CHECK` 等）の自己参照は `RENAME TO` / `RENAME COLUMN` 時に自動更新される
 - ドル引用符（`$$...$$`）内の `;` はステートメント区切りとして扱われない
