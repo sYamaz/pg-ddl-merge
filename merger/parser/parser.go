@@ -26,6 +26,7 @@ var (
 	reDropType            = regexp.MustCompile(`(?i)^DROP\s+TYPE\s+(?:(IF\s+EXISTS)\s+)?(\S+)`)
 	reAlterType           = regexp.MustCompile(`(?i)^ALTER\s+TYPE\s+(\S+)\s+(.+)`)
 	reAlterColUsing       = regexp.MustCompile(`(?i)\s+USING\s+.+$`)
+	reAlterFuncOrProcName = regexp.MustCompile(`(?i)^ALTER\s+(?:FUNCTION|PROCEDURE)\s+(?:IF\s+EXISTS\s+)?(\S+?)(?:\s*\([^)]*\))?\s+`)
 )
 
 // normalizeIdent removes surrounding double-quotes and lowercases for key lookup.
@@ -1149,6 +1150,16 @@ func parseAlterObject(sql string) (Statement, error) {
 					OldName: normalizeIdent(m[1]),
 					NewName: normalizeIdent(strings.TrimSuffix(m[2], ";")),
 				}, nil
+			}
+			// For FUNCTION/PROCEDURE, associate non-RENAME actions with the named object.
+			if e.kind == ObjFunction || e.kind == ObjProcedure {
+				if m := reAlterFuncOrProcName.FindStringSubmatch(sql); m != nil {
+					return AlterFunctionOptsStmt{
+						Kind: e.kind,
+						Name: normalizeIdent(m[1]),
+						SQL:  sql,
+					}, nil
+				}
 			}
 			return UnknownStmt{Raw: sql}, nil
 		}

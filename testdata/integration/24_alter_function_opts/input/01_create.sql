@@ -1,0 +1,1 @@
+CREATE FUNCTION secure_func() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$;

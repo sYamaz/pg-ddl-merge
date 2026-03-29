@@ -19,6 +19,7 @@ const (
 	StmtAlterSequence
 	StmtAlterSequenceOpts
 	StmtAlterObject
+	StmtAlterFunctionOpts
 	StmtTruncate
 	StmtUnknown
 )
@@ -230,6 +231,15 @@ type AlterObjectStmt struct {
 	NewName string
 }
 
+// AlterFunctionOptsStmt represents ALTER FUNCTION/PROCEDURE with non-RENAME actions
+// (e.g., OWNER TO, SECURITY DEFINER/INVOKER). The ALTER is associated with the named
+// object in the schema so it is emitted right after the CREATE.
+type AlterFunctionOptsStmt struct {
+	Kind ObjectKind // ObjFunction or ObjProcedure
+	Name string     // normalized name (without args)
+	SQL  string     // verbatim full SQL (without trailing semicolon)
+}
+
 type UnknownStmt struct {
 	Raw string
 }
@@ -250,5 +260,6 @@ func (s DropObjectStmt) stmtKind() StatementKind    { return StmtDropObject }
 func (s AlterSequenceStmt) stmtKind() StatementKind     { return StmtAlterSequence }
 func (s AlterSequenceOptsStmt) stmtKind() StatementKind { return StmtAlterSequenceOpts }
 func (s AlterObjectStmt) stmtKind() StatementKind       { return StmtAlterObject }
+func (s AlterFunctionOptsStmt) stmtKind() StatementKind { return StmtAlterFunctionOpts }
 func (s TruncateStmt) stmtKind() StatementKind          { return StmtTruncate }
 func (s UnknownStmt) stmtKind() StatementKind           { return StmtUnknown }

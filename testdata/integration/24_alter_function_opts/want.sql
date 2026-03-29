@@ -1,0 +1,3 @@
+CREATE FUNCTION secure_func() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$;
+ALTER FUNCTION secure_func() SECURITY DEFINER;
+ALTER FUNCTION secure_func() OWNER TO postgres;

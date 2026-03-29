@@ -25,9 +25,10 @@ type Index struct {
 // (VIEW, MATERIALIZED VIEW, SCHEMA, EXTENSION, FUNCTION, PROCEDURE,
 // TRIGGER, DOMAIN, POLICY, RULE).
 type GenericObject struct {
-	Kind parser.ObjectKind
-	Name string // normalized key
-	SQL  string // verbatim full SQL
+	Kind       parser.ObjectKind
+	Name       string   // normalized key
+	SQL        string   // verbatim full SQL
+	PostAlters []string // ALTER statements to emit right after CREATE (FUNCTION/PROCEDURE only)
 }
 
 // Schema holds the complete in-memory representation of the database schema.
